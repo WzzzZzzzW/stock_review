@@ -988,8 +988,8 @@ def collect_yesterday(symbol: str) -> dict:
 
 # ── 批量快速今日复盘 ──────────────────────────────────────────────────────
 
-# 按日期缓存，收盘后数据稳定
-_quick_batch_cache: dict[str, dict] = {}   # date_str → {symbol: result}
+# 盘中按 5 分钟桶刷新，盘后按日期缓存。技术结构不能在开盘后被冻结一整天。
+_quick_batch_cache: dict[str, dict] = {}   # cache_key → {symbol: result}
 
 
 def _calc_streak(pct_series: "pd.Series") -> int:
@@ -1182,12 +1182,17 @@ def _quick_review_one(bs_code: str, symbol: str) -> dict:
 
 def fetch_quick_batch(symbols: list[str]) -> list[dict]:
     """
-    批量快速技术复盘。按日期缓存，收盘后数据固定。
+    批量快速技术复盘。盘中每 5 分钟刷新，收盘后数据固定。
     baostock 单例 socket，加全局锁串行执行。
     """
-    today_str = datetime.date.today().isoformat()
-    cached = _quick_batch_cache.get(today_str, {})
-    missing = [s for s in symbols if s not in cached]
+    now_dt = datetime.datetime.now()
+    today_str = now_dt.date().isoformat()
+    minute = now_dt.hour * 60 + now_dt.minute
+    is_intraday = now_dt.weekday() < 5 and (570 <= minute < 690 or 780 <= minute < 900)
+    cache_key = f"{today_str}:{minute // 5}" if is_intraday else today_str
+    cached = _quick_batch_cache.get(cache_key, {})
+    # 网络抖动产生的“无数据/繁忙”不能缓存一整天；下一次请求必须允许重试。
+    missing = [s for s in symbols if s not in cached or cached[s].get("error")]
 
     if missing:
         def _work():
@@ -1206,7 +1211,10 @@ def fetch_quick_batch(symbols: list[str]) -> list[dict]:
         try:
             # 单只 ~0.3s，120 只批 ~40s；上限 120s 留足余量
             _bs_run(_work, timeout=120, label=f"快速复盘 batch({len(missing)})")
-            _quick_batch_cache[today_str] = cached
+            _quick_batch_cache[cache_key] = cached
+            if len(_quick_batch_cache) > 64:
+                for old_key in list(_quick_batch_cache)[:-32]:
+                    _quick_batch_cache.pop(old_key, None)
         except (BaostockBusy, BaostockTimeout, BaostockCooldown) as e:
             # 未完成的留空（每只标 error），命中缓存的仍可返回
             for s in missing:

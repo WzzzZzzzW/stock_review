@@ -389,8 +389,8 @@ def _enrich_position(p: dict, q: dict) -> dict:
 
 
 @router.get("")
-async def get_positions():
-    """获取所有持仓（含实时行情与计算字段）"""
+def get_positions():
+    """获取所有持仓（含实时行情、技术结构和统一多维裁决）"""
     store     = _load_store()
     positions = store.get("positions", [])
 
@@ -403,6 +403,28 @@ async def get_positions():
 
     symbols = [p["symbol"] for p in positions]
     quotes  = _fetch_quotes(symbols)
+    tech_map: dict[str, dict] = {}
+    industry_map: dict[str, str] = {}
+    sector_decisions: dict[str, dict] = {}
+    market_pct = None
+    try:
+        from data.stock_data import fetch_quick_batch, get_industry_map
+        tech_map = {
+            str(row.get("symbol")): row
+            for row in fetch_quick_batch(symbols)
+            if row.get("symbol")
+        }
+        industry_map = get_industry_map(block=False)
+        from api.industry import industry_summary
+        sector_decisions = {
+            row.get("name", ""): row.get("decision") or {}
+            for row in industry_summary().get("industries", [])
+        }
+        from api.daily_report import _fetch_indices
+        pcts = [i.get("pct") for i in _fetch_indices() if i.get("pct") is not None]
+        market_pct = sum(pcts) / len(pcts) if pcts else None
+    except Exception as e:
+        print(f"[portfolio] 多维数据补充失败，将降低结论置信度: {e}")
 
     enriched        = []
     total_cost      = 0.0
@@ -414,6 +436,25 @@ async def get_positions():
         sym = p["symbol"]
         q   = quotes.get(sym, {})
         ep  = _enrich_position(p, q)
+        industry = industry_map.get(sym, "")
+        ep["industry"] = industry
+        ep["tech"] = tech_map.get(sym) or {}
+        try:
+            from services.verdict_service import compute_quick_decision
+            ep["decision"] = compute_quick_decision(
+                q,
+                ep["tech"],
+                {
+                    "market_pct": market_pct,
+                    "sector": industry,
+                    "sector_decision": sector_decisions.get(industry) or {},
+                    "stop_loss": p.get("stop_loss"),
+                    "target_price": p.get("target_price"),
+                },
+                purpose="position",
+            )
+        except Exception as e:
+            ep["decision_error"] = str(e)
         enriched.append(ep)
 
         total_cost      += ep["cost_value"]

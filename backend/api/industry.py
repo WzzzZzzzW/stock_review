@@ -6,6 +6,7 @@
 import time
 import io
 import sys
+import threading
 from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/api/industry", tags=["行业"])
@@ -15,6 +16,7 @@ _STOCK_TTL = 60   # 成分股 1分钟缓存
 
 _cache: dict = {"data": [], "ts": 0.0, "updated_at": ""}
 _CACHE_TTL = 60   # 行业汇总 1分钟缓存
+_cache_lock = threading.Lock()
 
 # 行业名称→代码 映射缓存
 _code_cache: dict = {"data": {}, "ts": 0.0}
@@ -175,7 +177,14 @@ def industry_summary():
     if _cache["data"] and now - _cache["ts"] < _CACHE_TTL:
         return {"industries": _cache["data"], "updated_at": _cache.get("updated_at", "")}
 
+    if not _cache_lock.acquire(timeout=20):
+        if _cache["data"]:
+            return {"industries": _cache["data"], "updated_at": _cache.get("updated_at", "")}
+        raise HTTPException(status_code=503, detail="行业数据正在构建，请稍后重试")
     try:
+        now = time.time()
+        if _cache["data"] and now - _cache["ts"] < _CACHE_TTL:
+            return {"industries": _cache["data"], "updated_at": _cache.get("updated_at", "")}
         import akshare as ak
         old = sys.stderr
         sys.stderr = io.StringIO()
@@ -207,8 +216,15 @@ def industry_summary():
                 "leader":     str(row.get("领涨股", "--")),
             })
 
-        # 按涨幅排序
-        result.sort(key=lambda x: x["pct_num"], reverse=True)
+        from services.verdict_service import compute_sector_decision
+        for item in result:
+            item["decision"] = compute_sector_decision(item)
+
+        # 决策质量优先；涨幅只在同分时作为次级排序。
+        result.sort(
+            key=lambda x: ((x.get("decision") or {}).get("score", 50), x["pct_num"]),
+            reverse=True,
+        )
 
         from datetime import datetime
         updated_at = datetime.now().strftime("%H:%M:%S")
@@ -221,6 +237,8 @@ def industry_summary():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"行业数据获取失败: {e}")
+    finally:
+        _cache_lock.release()
 
 
 @router.get("/stocks/{industry_name}")

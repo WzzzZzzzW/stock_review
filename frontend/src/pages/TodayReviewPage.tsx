@@ -20,6 +20,17 @@ type MarketStatus = {
   can_generate_postmarket: boolean
 }
 
+type MultiDecision = {
+  score: number
+  action: string
+  rank?: number
+  summary: string
+  trigger?: string
+  confidence?: string
+  coverage?: number
+  dimensions?: { key: string; label: string; score: number; evidence: string }[]
+}
+
 type Stock = {
   symbol: string
   name: string
@@ -39,6 +50,7 @@ type Stock = {
     turnover?: number
     close?: number
   }
+  decision?: MultiDecision
 }
 
 type DistBin = { label: string; count: number; side: 'up' | 'down' }
@@ -83,6 +95,7 @@ type Industry = {
   down_count?: string
   leader?: string
   net_in?: string
+  decision?: MultiDecision
 }
 
 type Trend = {
@@ -459,76 +472,23 @@ function stockTech(s: Stock) {
 }
 
 function decideStock(s: Stock) {
-  const pct = stockPct(s)
-  const t = stockTech(s)
-  const tagText = t.tags.join(' ')
-  const hot = t.ma20 >= 18 || tagText.includes('RSI超买') || tagText.includes('连涨')
-  const trendBad = t.ma20 < -3 || t.macd.includes('死叉') || t.macd.includes('空头')
-  const trendGood = t.ma20 > 0 && (t.macd.includes('多头') || tagText.includes('强势'))
-  const volumeOk = t.vol >= 1.05
-  const volumeWeak = t.vol > 0 && t.vol < 0.85
-
-  if (pct <= -5) {
-    return {
-      rank: 5,
-      action: '剔除',
-      tone: 'green' as const,
-      reason: `单日下跌 ${fmtPct(pct)}，已经触发大阴线裁决，短线先出自选池，不用中期趋势替它开脱。`,
-    }
-  }
-  if (pct <= -3 && hot) {
-    return {
-      rank: 5,
-      action: '剔除',
-      tone: 'green' as const,
-      reason: `高位过热后下跌 ${fmtPct(pct)}，这是退潮信号，不再占用明日主计划。`,
-    }
-  }
-  if (pct >= 4 && trendGood && !hot && volumeOk) {
-    return {
-      rank: 0,
-      action: '重点进攻',
-      tone: 'red' as const,
-      reason: `涨幅 ${fmtPct(pct)}、站上20日线 ${fmtPct(t.ma20)}、MACD偏多且量能不弱，属于自选池里最值得主动盯的票。`,
-    }
-  }
-  if (pct >= 3 && trendGood && hot) {
-    return {
-      rank: 1,
-      action: '保留但不追',
-      tone: 'amber' as const,
-      reason: `走势强，但距20日线 ${fmtPct(t.ma20)} 且出现过热标签，明天只接受分歧承接，不追高买单。`,
-    }
-  }
-  if (pct > 0 && trendBad) {
-    return {
-      rank: 3,
-      action: '剔除',
-      tone: 'green' as const,
-      reason: `表面红盘 ${fmtPct(pct)}，但仍在20日线下方 ${fmtPct(t.ma20)}，MACD未修复，反弹质量不合格。`,
-    }
-  }
-  if (pct <= 0 && trendBad) {
-    return {
-      rank: 4,
-      action: '剔除',
-      tone: 'green' as const,
-      reason: `价格走弱、趋势也弱，${t.macd || '技术结构未修复'}，继续留在自选池只会占用注意力。`,
-    }
-  }
-  if (volumeWeak) {
-    return {
-      rank: 3,
-      action: '降级',
-      tone: 'green' as const,
-      reason: `量比 ${t.vol.toFixed(2)}，资金参与不足，即使红盘也不算有效进攻。`,
-    }
-  }
-  return {
-    rank: 2,
-    action: '保留',
+  const decision = s.decision
+  if (!decision || !Number.isFinite(Number(decision.score))) return {
+    rank: 50,
+    action: '数据待补',
     tone: 'blue' as const,
-    reason: `结构没有明显破坏，但进攻性不够，只保留为备选，不占主仓位决策。`,
+    reason: '趋势、量价、板块和资金证据尚未覆盖，不依据当日涨跌幅强行裁决。',
+    score: 50,
+    dimensions: [] as MultiDecision['dimensions'],
+  }
+  const tone = decision.score >= 68 ? 'red' as const
+    : decision.score < 46 ? 'green' as const
+      : decision.action.includes('不追') ? 'amber' as const : 'blue' as const
+  return {
+    ...decision,
+    rank: decision.rank ?? 100 - decision.score,
+    tone,
+    reason: decision.summary,
   }
 }
 
@@ -567,12 +527,17 @@ function WatchlistDecisionPanel({ items }: { items?: Stock[] }) {
                     <span className="rounded bg-gray-900 px-2 py-0.5 text-[11px] font-bold">{decision.action}</span>
                   </div>
                   <div className="mt-0.5 text-[11px] text-gray-500">
-                    {stock.symbol} · 量比 {t.vol ? t.vol.toFixed(2) : '--'} · 距20日线 {fmtPct(t.ma20)} · {t.macd || 'MACD --'}
+                    {stock.symbol} · 决策 {decision.score ?? '--'}分 · 覆盖 {stock.decision?.coverage ?? '--'}% · 量比 {t.vol ? t.vol.toFixed(2) : '--'}
                   </div>
                 </div>
                 <div className={`shrink-0 font-mono text-sm font-bold ${pctClass(stockPct(stock))}`}>{fmtPct(stockPct(stock))}</div>
               </div>
               <div className="mt-1.5 text-xs leading-5 text-gray-300">{decision.reason}</div>
+              {!!stock.decision?.dimensions?.length && (
+                <div className="mt-1 text-[11px] text-gray-500">
+                  {stock.decision.dimensions.slice(0, 5).map(d => `${d.label}${d.score}`).join(' · ')}
+                </div>
+              )}
             </div>
           )
         })}
@@ -607,12 +572,12 @@ function IndustryList({ items, empty }: { items?: Industry[]; empty: string }) {
   return (
     <div className="space-y-2">
       {items.slice(0, 6).map(x => (
-        <div key={x.name} className="flex items-center justify-between gap-3 rounded-md bg-gray-950/60 px-3 py-2">
+        <div key={x.name} className="flex items-start justify-between gap-3 rounded-md bg-gray-950/60 px-3 py-2">
           <div className="min-w-0">
-            <div className="truncate text-sm text-gray-100">{x.name}</div>
-            <div className="truncate text-[11px] text-gray-600">领涨：{x.leader || '--'}</div>
+            <div className="flex items-center gap-2 text-sm text-gray-100"><span className="truncate">{x.name}</span><span className="text-[11px] font-semibold text-blue-300">{x.decision?.action || '待判断'}</span></div>
+            <div className="mt-0.5 text-[11px] leading-4 text-gray-600">{x.decision?.summary || `领涨：${x.leader || '--'}`}</div>
           </div>
-          <div className={`shrink-0 text-sm font-semibold ${pctClass(x.pct_num)}`}>{x.pct || fmtPct(x.pct_num)}</div>
+          <div className="shrink-0 text-right"><div className="text-sm font-semibold text-blue-300">{x.decision?.score ?? '--'}分</div><div className={`text-xs ${pctClass(x.pct_num)}`}>{x.pct || fmtPct(x.pct_num)}</div></div>
         </div>
       ))}
     </div>

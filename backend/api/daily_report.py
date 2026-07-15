@@ -120,6 +120,7 @@ def _fetch_sectors() -> dict:
                 "pct":    round(pct, 2),
                 "leader": ind.get("leader", ""),
                 "type":   "行业",
+                "decision": ind.get("decision") or {},
             })
     except Exception:
         pass
@@ -173,7 +174,14 @@ async def daily_report():
 
     indices   = _fetch_indices()
     sectors   = _fetch_sectors()
+    from services.verdict_service import compute_market_decision
+    decision = compute_market_decision(indices, sectors)
     sentiment = _market_sentiment(indices)
+    sentiment.update({
+        "score": decision["score"],
+        "label": decision["action"],
+        "desc": decision["summary"],
+    })
     today     = date.today()
 
     # 判断交易状态
@@ -192,6 +200,7 @@ async def daily_report():
         "indices":    indices,
         "sectors":    sectors,
         "sentiment":  sentiment,
+        "decision":   decision,
     }
 
     _cache["data"] = payload

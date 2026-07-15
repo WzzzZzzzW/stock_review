@@ -250,12 +250,6 @@ def _on_startup():
     def delayed():
         import time
         time.sleep(5)
-        # 预热「代码→行业」全市场映射（约 10s，供规则库结果表行业列即时显示）
-        try:
-            from data.stock_data import get_industry_map
-            get_industry_map(block=True)
-        except Exception:
-            pass
         _backfill_limitup_on_startup()
         _today_review_catchup_on_startup()
         # 涨停补齐后再补脑库自动导入（错峰，避免同时占满 AI/网络）
@@ -277,6 +271,13 @@ def _on_startup():
                 print("[recommend] 下一交易日计划缓存就绪")
         except Exception as e:
             print(f"[recommend] 启动预热失败: {e}")
+        # 行业映射使用同一个 baostock 单例，放到技术指标和推荐预热之后，
+        # 避免全市场映射超时把个股多维指标一起拖入熔断。
+        try:
+            from data.stock_data import get_industry_map
+            get_industry_map(block=True)
+        except Exception:
+            pass
     threading.Thread(target=delayed, daemon=True).start()
 
 

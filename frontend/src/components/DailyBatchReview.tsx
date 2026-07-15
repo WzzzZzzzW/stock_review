@@ -309,15 +309,15 @@ export default function DailyBatchReview({ onSelectStock }: Props) {
                 tab === 'strong' ? 'bg-purple-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
               }`}
             >
-              今日强势股 ⚠️
+              多维候选池
             </button>
           </div>
 
-          {/* 强势股追高提示 */}
+          {/* 多维候选说明 */}
           {tab === 'strong' && (
             <div className="mx-5 mt-3 px-3 py-2 rounded-lg bg-amber-900/20 border border-amber-800/50 text-[11px] text-amber-300/90 leading-relaxed">
-              此处为「概念龙头 / 龙虎榜净买入 / 行业领涨」，本质是<b>当天涨得最猛的票</b>，多数已大幅上涨甚至涨停。
-              仅供观察题材热度，<b>直接追入有较高追高风险</b>，请结合回踩企稳、量能等再判断。
+              候选由题材、龙虎榜、行业、趋势、量价和风险共同筛选，涨跌幅只是一项证据。
+              表格用于核对分项，不代表看到红盘就追入；最终动作以统一决策分和触发条件为准。
             </div>
           )}
 
@@ -341,7 +341,7 @@ export default function DailyBatchReview({ onSelectStock }: Props) {
             <div className="px-5 py-8 text-sm text-gray-600 text-center">
               {tab === 'mine'
                 ? '持仓和自选中暂无股票，先去加自选 / 录入持仓吧'
-                : '暂无强势股数据（盘前或数据源未就绪）'}
+                : '暂无通过多维筛选的候选（盘前或数据源未就绪）'}
             </div>
           )}
 

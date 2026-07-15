@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -95,52 +96,16 @@ def _stock_logic(stock: dict) -> str:
 
 
 def _stock_decision(stock: dict) -> dict:
-    name = stock.get("name") or stock.get("symbol")
-    pct = _safe_float(stock.get("pct_change"))
-    tech = stock.get("tech") or {}
-    technical = tech.get("technical") or {}
-    trend = tech.get("trend") or {}
-    tags = " ".join(trend.get("tags") or [])
-    vol = _safe_float(technical.get("vol_ratio"))
-    ma20 = _safe_float(technical.get("ma20_pct"))
-    macd = str(technical.get("macd_status") or "")
-    hot = ma20 >= 18 or "RSI超买" in tags or "连涨" in tags
-    trend_bad = ma20 < -3 or "死叉" in macd or "空头" in macd
-    trend_good = ma20 > 0 and ("多头" in macd or "强势" in tags)
+    from services.verdict_service import compute_quick_decision
 
-    if pct <= -5:
-        action = "剔除"
-        reason = f"{name}单日下跌{_pct_label(pct)}，触发大阴线裁决，短线先出自选池。"
-        rank = 5
-    elif pct <= -3 and hot:
-        action = "剔除"
-        reason = f"{name}高位过热后下跌{_pct_label(pct)}，退潮信号优先于中期趋势，明日主计划剔除。"
-        rank = 5
-    elif pct >= 4 and trend_good and not hot and vol >= 1.05:
-        action = "重点进攻"
-        reason = f"{name}涨幅{_pct_label(pct)}，站上20日线{ma20:+.2f}%，MACD偏多且量能不弱，是自选池第一顺位。"
-        rank = 0
-    elif pct >= 3 and trend_good and hot:
-        action = "保留但不追"
-        reason = f"{name}走势强，但距20日线{ma20:+.2f}%且有过热信号，保留为一线标的，但不追高买单。"
-        rank = 1
-    elif pct > 0 and trend_bad:
-        action = "剔除"
-        reason = f"{name}表面红盘{_pct_label(pct)}，但趋势仍未修复，反弹质量不合格。"
-        rank = 3
-    elif pct <= 0 and trend_bad:
-        action = "剔除"
-        reason = f"{name}价格和趋势同时走弱，继续留在自选池只会占用注意力。"
-        rank = 4
-    elif 0 < vol < 0.85:
-        action = "降级"
-        reason = f"{name}量比仅{vol:.2f}，资金参与不足，不作为明日主攻标的。"
-        rank = 3
-    else:
-        action = "保留"
-        reason = f"{name}结构没有明显破坏，但进攻性不足，只保留为备选。"
-        rank = 2
-    return {"action": action, "reason": reason, "rank": rank}
+    decision = compute_quick_decision(
+        stock,
+        stock.get("tech") or {},
+        stock.get("decision_context") or {},
+        purpose="watchlist",
+    )
+    decision["reason"] = decision["summary"]
+    return decision
 
 
 def _build_market(trade_date: str, progress_cb=None) -> dict:
@@ -258,6 +223,22 @@ def _build_watchlist(watchlist: list[dict] | None, progress_cb=None) -> dict:
         symbols = [x["code"] for x in items]
         quotes = _fetch_sina_hq(symbols)
         techs = _tech_map(symbols)
+        industry_map: dict[str, str] = {}
+        sector_decisions: dict[str, dict] = {}
+        market_pct = None
+        try:
+            from data.stock_data import get_industry_map
+            from api.industry import industry_summary
+            from api.daily_report import _fetch_indices
+            industry_map = get_industry_map(block=False)
+            sector_decisions = {
+                row.get("name", ""): row.get("decision") or {}
+                for row in industry_summary().get("industries", [])
+            }
+            pcts = [x.get("pct") for x in _fetch_indices() if x.get("pct") is not None]
+            market_pct = sum(pcts) / len(pcts) if pcts else None
+        except Exception:
+            pass
         stocks = []
         for it in items:
             q = quotes.get(it["code"], {})
@@ -269,6 +250,13 @@ def _build_watchlist(watchlist: list[dict] | None, progress_cb=None) -> dict:
                 "pct_change": q.get("pct_change", 0),
                 "turnover": q.get("turnover", 0),
                 "tech": techs.get(it["code"], {}),
+            }
+            industry = industry_map.get(it["code"], "")
+            row["industry"] = industry
+            row["decision_context"] = {
+                "market_pct": market_pct,
+                "sector": industry,
+                "sector_decision": sector_decisions.get(industry) or {},
             }
             row["logic"] = _stock_logic(row)
             row["decision"] = _stock_decision(row)
@@ -295,7 +283,10 @@ def _build_watchlist(watchlist: list[dict] | None, progress_cb=None) -> dict:
             "top_winners": top[:5],
             "top_losers": list(reversed(top[-5:])),
             "conclusion": conclusion,
-            "analysis_points": [_stock_logic(s) for s in top[:8]],
+            "analysis_points": [
+                f"{s.get('name')}：{(s.get('decision') or {}).get('action')}。{(s.get('decision') or {}).get('summary')}"
+                for s in decisions[:8]
+            ],
             "decisions": decisions,
         }
     except Exception as e:
@@ -309,13 +300,13 @@ def _build_industry(progress_cb=None) -> dict:
         from api.industry import industry_summary
         data = industry_summary()
         industries = data.get("industries", [])
-        top_up = industries[:8]
-        top_down = sorted(industries, key=lambda x: _safe_float(x.get("pct_num")))[:8]
-        hot = [x for x in top_up if _safe_float(x.get("pct_num")) > 0]
-        cold = [x for x in top_down if _safe_float(x.get("pct_num")) < 0]
+        top_up = sorted(industries, key=lambda x: (x.get("decision") or {}).get("score", 50), reverse=True)[:8]
+        top_down = sorted(industries, key=lambda x: (x.get("decision") or {}).get("score", 50))[:8]
+        hot = [x for x in top_up if (x.get("decision") or {}).get("action") in ("主线候选", "轮动观察")]
+        cold = [x for x in top_down if (x.get("decision") or {}).get("action") == "弱势回避"]
         conclusion = "；".join([
-            f"领涨：{'、'.join(x.get('name', '') for x in hot[:3]) or '暂无'}",
-            f"领跌：{'、'.join(x.get('name', '') for x in cold[:3]) or '暂无'}",
+            f"多维主线：{'、'.join(x.get('name', '') for x in hot[:3]) or '暂无达标板块'}",
+            f"明确回避：{'、'.join(x.get('name', '') for x in cold[:3]) or '暂无'}",
         ])
         return {
             "updated_at": data.get("updated_at", ""),
@@ -331,14 +322,34 @@ def _build_international(progress_cb=None) -> dict:
     if progress_cb:
         progress_cb("整理国际形势复盘...")
     try:
-        from api.news_trending import _get_items
-        from services.news_ranking_service import compute_trending
-        items, ts = _get_items("intl", refresh=False)
-        trends = compute_trending(items, "intl", top_n=8)
+        result: dict[str, Any] = {}
+
+        def _work():
+            try:
+                from api.news_trending import _get_items
+                from services.news_ranking_service import compute_trending
+                items, ts = _get_items("intl", refresh=False)
+                result["items"] = compute_trending(items, "intl", top_n=8)
+                result["ts"] = ts
+            except Exception as e:
+                result["error"] = str(e)
+
+        worker = threading.Thread(target=_work, daemon=True)
+        worker.start()
+        worker.join(timeout=25)
+        if worker.is_alive():
+            return {
+                "items": [],
+                "conclusion": "国际新闻源响应超时，本日档案不采用未验证的国际信号。",
+                "error": "国际新闻源超过25秒",
+            }
+        if result.get("error"):
+            raise RuntimeError(result["error"])
+        trends = result.get("items") or []
         relevant = [x for x in trends if _safe_float(x.get("impact_score")) > 0]
         conclusion = "国际侧重点：" + ("、".join(x.get("title", "") for x in relevant[:3]) or "暂无显著 A 股映射热点")
         return {
-            "updated_at": ts,
+            "updated_at": result.get("ts", ""),
             "items": trends,
             "conclusion": conclusion,
         }

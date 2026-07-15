@@ -289,29 +289,6 @@ def _get_hot_sectors_map() -> dict[str, float]:
         return {}
 
 
-def _get_simple_technicals(symbol: str, price: float) -> dict:
-    """
-    极简技术面：不调 baostock，只用当日行情估算信号。
-    返回 {signal: "强/中/弱", note: str}
-    """
-    pct = 0.0
-    try:
-        hq_map = _get_sina_hq([symbol])
-        hq = hq_map.get(symbol, {})
-        pct = hq.get("pct_change", 0)
-    except Exception:
-        pass
-
-    # 简单规则
-    if pct > 5:
-        return {"signal": "弱", "note": f"今日已大涨{pct:.1f}%，追高需谨慎"}
-    if 1 <= pct <= 5:
-        return {"signal": "强", "note": f"今日上涨{pct:.1f}%，趋势向好"}
-    if -1 < pct < 1:
-        return {"signal": "中", "note": "今日横盘蓄力"}
-    return {"signal": "弱", "note": f"今日回调{pct:.1f}%，等待止跌信号"}
-
-
 # ── 脑库规则匹配（把用户私人交易规则套到候选股上）────────────────────────────
 
 _RULE_MATCH_SYSTEM = """你是"私人交易规则匹配引擎"。给你一批今日候选股和用户自己沉淀的交易规则，
@@ -486,6 +463,26 @@ def _build_recommendations(mode: str) -> tuple[list[dict], list[str], str, str, 
     # ⑤ 批量获取行情
     valid_codes = [c for c in code_map.values() if c and len(c) == 6]
     hq_map = _get_sina_hq(valid_codes) if valid_codes else {}
+    tech_map: dict[str, dict] = {}
+    sector_decision_map: dict[str, dict] = {}
+    market_pct = None
+    try:
+        from data.stock_data import fetch_quick_batch
+        tech_map = {
+            str(row.get("symbol")): row
+            for row in fetch_quick_batch(valid_codes)
+            if row.get("symbol")
+        }
+        from api.industry import industry_summary
+        sector_decision_map = {
+            row.get("name", ""): row.get("decision") or {}
+            for row in industry_summary().get("industries", [])
+        }
+        from api.daily_report import _fetch_indices
+        index_pcts = [i.get("pct") for i in _fetch_indices() if i.get("pct") is not None]
+        market_pct = sum(index_pcts) / len(index_pcts) if index_pcts else None
+    except Exception as e:
+        print(f"[recommend] 多维数据补充失败，将降低结论置信度: {e}")
 
     # ⑥ 组装结果
     results: list[dict] = []
@@ -505,13 +502,9 @@ def _build_recommendations(mode: str) -> tuple[list[dict], list[str], str, str, 
         pct   = hq.get("pct_change", 0)
         price = hq.get("price", 0)
 
-        # 基本过滤
-        if mode == "today":
-            if pct >= 9.5:  continue   # 已涨停，不追
-            if pct < -3:    continue   # 今日大跌，避开
-        else:
-            if pct >= 9.5:  continue   # 明日有开板风险
-            if pct < -4:    continue   # 今日大跌趋势不好
+        # 涨停无法正常成交，属于交易约束；其他涨跌不再直接剔除。
+        if pct >= 9.8:
+            continue
 
         # ⑦ 评分（新闻AI强度 + 辅助加成）
         strength = ai_stock.get("strength", "弱")
@@ -539,16 +532,26 @@ def _build_recommendations(mode: str) -> tuple[list[dict], list[str], str, str, 
             base_score += min(8, sec_pct * 2)
             bonus_tags.append(f"🔥 {sector}板块今日涨{sec_pct:.1f}%")
 
-        # 今日涨幅加成（适度上涨最好，已大涨扣分）
-        if 1 <= pct < 5:
-            base_score += 5
-        elif pct >= 5:
-            base_score -= 5
-
-        score = min(98, round(base_score, 1))
-
-        # ⑧ 入场策略
-        strategy = _entry_strategy(mode, pct, price, strength)
+        from services.verdict_service import compute_quick_decision
+        decision = compute_quick_decision(
+            hq,
+            tech_map.get(sym) or {},
+            {
+                "market_pct": market_pct,
+                "sector": sector,
+                "sector_decision": sector_decision_map.get(sector) or {},
+                "catalyst_strength": strength,
+                "catalyst": ai_stock.get("reason", ""),
+                "lhb_amt": lhb_amt,
+                "north_signal": north_signal,
+            },
+            purpose="recommend",
+        )
+        # 新闻候选基础分只作为事件先验，最终裁决由多维引擎决定。
+        score = round(decision["score"] * 0.82 + min(98, base_score) * 0.18, 1)
+        decision["score"] = score
+        decision["rank"] = 100 - score
+        strategy = decision["trigger"]
 
         # 拼装理由（AI 原因 + 加成标签）
         ai_reason = ai_stock.get("reason", "")
@@ -564,17 +567,7 @@ def _build_recommendations(mode: str) -> tuple[list[dict], list[str], str, str, 
         if news_ref:
             reasons.append(f"触发新闻：{news_ref}" + (f"（{news_time}）" if news_time else ""))
         reasons.extend(bonus_tags)
-        # 今日价格行情
-        if pct >= 9.5:
-            reasons.append(f"⚠️ 今日已涨停，等开板机会")
-        elif pct >= 5:
-            reasons.append(f"⚠️ 今日已大涨{pct:.1f}%，追高风险")
-        elif 1 <= pct < 5:
-            reasons.append(f"✅ 今日上涨{pct:.1f}%，强势未过热")
-        elif -0.5 < pct < 1:
-            reasons.append(f"今日横盘({pct:+.1f}%)，等待方向选择")
-        else:
-            reasons.append(f"⚠️ 今日回调{pct:.1f}%，需确认止跌")
+        reasons.append(f"🧭 {decision['action']}：{decision['summary']}")
 
         results.append({
             "symbol":        sym,
@@ -592,9 +585,21 @@ def _build_recommendations(mode: str) -> tuple[list[dict], list[str], str, str, 
             "lhb_amt":       lhb_amt,
             "north_signal":  north_signal,
             "tags": _build_tags(ai_stock, lhb_amt, north_signal, sec_pct),
+            "decision": decision,
+            "tech": tech_map.get(sym) or {},
         })
 
     results = _apply_brain_rules(results, hot_themes, sentiment)
+    for item in results:
+        decision = item.get("decision") or {}
+        decision["score"] = item.get("score", decision.get("score", 50))
+        decision["rank"] = 100 - decision["score"]
+        if decision["score"] >= 70 and decision.get("coverage", 0) >= 48:
+            decision["action"] = "计划进攻"
+        elif decision["score"] >= 52:
+            decision["action"] = "等待触发"
+        else:
+            decision["action"] = "放弃"
     results.sort(key=lambda x: -x["score"])
     final = results[:8]
 
@@ -621,26 +626,6 @@ def _build_tags(ai_stock: dict, lhb_amt: float, north_signal: float, sec_pct: fl
     if sec_pct > 1:
         tags.append(f"{ai_stock.get('sector','')}领涨" if ai_stock.get("sector") else "板块领涨")
     return tags[:3]
-
-
-def _entry_strategy(mode: str, pct: float, price: float, strength: str) -> str:
-    """生成一句话入场策略"""
-    if mode == "today":
-        if pct >= 7:
-            return "今日已大涨，如消息持续发酵可等回调至日内均价附近轻仓介入，严格止损"
-        if 2 <= pct < 5:
-            return "当前为较佳入场窗口，可标准仓位入场，以今日最低价为止损参考"
-        if 0 <= pct < 2:
-            return "横盘蓄力，若盘中放量突破当日高点可跟进，止损设今日低点"
-        return "今日偏弱，建议等待股价企稳回升信号再入场，不要抄底"
-    else:
-        if pct >= 5:
-            return "今日大涨，明日若高开>3%可先观望，低开后快速拉升是较好入场机会"
-        if 1 <= pct < 5:
-            return "今日收涨，明日可在集合竞价阶段观察，若以昨收±1%开盘可正常入场"
-        if -1 < pct < 1:
-            return "今日横盘，明日关注是否放量突破，突破则跟进，量能不足则继续观望"
-        return "今日偏弱，明日需确认止跌信号（如低开后快速翻红）再考虑入场"
 
 
 # ── API 路由 ──────────────────────────────────────────────────────────────────

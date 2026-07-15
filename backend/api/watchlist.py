@@ -129,8 +129,8 @@ def _fetch_sina_hq(codes: list[str]) -> dict[str, dict]:
 # ── 批量行情 ──────────────────────────────────────────────────────────────────
 
 @router.get("/batch")
-async def batch_quotes(symbols: str = ""):
-    """批量获取股票实时行情（新浪财经）"""
+def batch_quotes(symbols: str = ""):
+    """批量获取实时行情，并附统一多维裁决。"""
     codes = [s.strip() for s in symbols.split(",") if s.strip()]
     if not codes:
         return JSONResponse({"stocks": [], "updated_at": ""})
@@ -146,10 +146,42 @@ async def batch_quotes(symbols: str = ""):
     result = []
     for code in codes:
         if code in _hq_cache:
-            result.append(_hq_cache[code]["info"])
+            result.append(dict(_hq_cache[code]["info"]))
         else:
             result.append({"symbol": code, "name": "--", "price": 0,
                            "pct_change": 0, "not_found": True})
+
+    try:
+        from data.stock_data import fetch_quick_batch, get_industry_map
+        from services.verdict_service import compute_quick_decision
+
+        tech_map = {
+            str(row.get("symbol")): row
+            for row in fetch_quick_batch(codes)
+            if row.get("symbol")
+        }
+        industry_map = get_industry_map(block=False)
+        market_pct = None
+        try:
+            from api.daily_report import _fetch_indices
+            index_pcts = [i.get("pct") for i in _fetch_indices() if i.get("pct") is not None]
+            market_pct = sum(index_pcts) / len(index_pcts) if index_pcts else None
+        except Exception:
+            pass
+        for row in result:
+            symbol = row.get("symbol", "")
+            tech = tech_map.get(symbol, {})
+            row["tech"] = tech
+            row["industry"] = industry_map.get(symbol, "")
+            row["decision"] = compute_quick_decision(
+                row,
+                tech,
+                {"market_pct": market_pct, "sector": row["industry"]},
+                purpose="watchlist",
+            )
+    except Exception as e:
+        for row in result:
+            row.setdefault("decision_error", str(e))
 
     return JSONResponse({
         "stocks":     result,
@@ -308,23 +340,49 @@ def get_recommendations_sync() -> list[dict]:
         return []
 
     hq_map = _fetch_sina_hq(list(cand_by_symbol.keys()))
+    symbols = list(cand_by_symbol.keys())
+    tech_map: dict[str, dict] = {}
+    market_pct = None
+    try:
+        from data.stock_data import fetch_quick_batch
+        tech_map = {
+            str(row.get("symbol")): row
+            for row in fetch_quick_batch(symbols)
+            if row.get("symbol")
+        }
+        from api.daily_report import _fetch_indices
+        pcts = [i.get("pct") for i in _fetch_indices() if i.get("pct") is not None]
+        market_pct = sum(pcts) / len(pcts) if pcts else None
+    except Exception:
+        pass
     result = []
     for sym, info in cand_by_symbol.items():
         hq = hq_map.get(sym)
         if not hq or hq.get("not_found") or hq["price"] <= 0:
             continue
         pct = hq["pct_change"]
-        if pct < -3:
-            continue
+        from services.verdict_service import compute_quick_decision
+        decision = compute_quick_decision(
+            hq,
+            tech_map.get(sym) or {},
+            {
+                "market_pct": market_pct,
+                "catalyst_strength": "中" if info["score"] >= 5 else "弱",
+                "catalyst": "、".join(dict.fromkeys(info["reasons"])),
+            },
+            purpose="candidate",
+        )
         result.append({
             "symbol":     sym,
             "name":       hq["name"] or info["name"],
             "price":      hq["price"],
             "pct_change": pct,
             "reasons":    list(dict.fromkeys(info["reasons"])),
-            "score":      round(info["score"], 4),
+            "score":      decision["score"],
             "pe":         0,
             "turnover":   0,
+            "decision":   decision,
+            "tech":       tech_map.get(sym) or {},
         })
 
     result.sort(key=lambda x: x["score"], reverse=True)

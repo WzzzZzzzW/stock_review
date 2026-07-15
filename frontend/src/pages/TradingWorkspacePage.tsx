@@ -31,6 +31,24 @@ interface MarketStatus {
   is_market_open: boolean
 }
 
+interface DecisionDimension {
+  key: string
+  label: string
+  score: number
+  evidence: string
+}
+
+interface MultiDecision {
+  score: number
+  action: string
+  summary: string
+  trigger?: string
+  confidence?: string
+  coverage?: number
+  dimensions?: DecisionDimension[]
+  evidence?: { positive?: string[]; negative?: string[] }
+}
+
 interface Position {
   symbol: string
   name: string
@@ -46,6 +64,7 @@ interface Position {
   at_stop_loss?: boolean
   near_stop_loss?: boolean
   at_target?: boolean
+  decision?: MultiDecision
 }
 
 interface PortfolioData {
@@ -87,6 +106,7 @@ interface RecommendedStock {
   reasons?: string[]
   strategy?: string
   tags?: string[]
+  decision?: MultiDecision
 }
 
 interface RecommendationData {
@@ -106,6 +126,8 @@ interface Quote {
   pct_change: number
   amount?: number
   pre_market?: boolean
+  industry?: string
+  decision?: MultiDecision
 }
 
 interface DailyReport {
@@ -118,10 +140,11 @@ interface DailyReport {
     down_count?: number
   }
   updated_at?: string
+  decision?: MultiDecision & { position_cap?: number }
 }
 
 interface IndustryData {
-  industries?: { name: string; pct: string; pct_num: number; leader: string; net_in?: string }[]
+  industries?: { name: string; pct: string; pct_num: number; leader: string; net_in?: string; decision?: MultiDecision }[]
   updated_at?: string
 }
 
@@ -151,23 +174,40 @@ function positionDecision(position: Position, saved?: GuidanceEntry) {
   if (position.at_stop_loss) return { action: '清仓', detail: `已触及止损价 ${position.stop_loss ?? '--'}，不延迟执行`, danger: true }
   if (position.at_target) return { action: '减仓50%', detail: `已达到目标价 ${position.target_price ?? '--'}，先兑现利润`, danger: false }
   if (position.near_stop_loss) return { action: '减仓30%', detail: '距离止损不足5%，先降低风险敞口', danger: true }
-  if (position.pnl_pct <= -8) return { action: '减仓50%', detail: '累计回撤超过8%，当前仓位不再具备进攻性价比', danger: true }
-  if (position.pnl_pct >= 15 && position.pct_change < 0) return { action: '减仓30%', detail: '已有利润垫但当日转弱，主动锁定部分收益', danger: false }
-  if (position.pct_change <= -2) return { action: '减仓30%', detail: '当日弱于市场，先收缩仓位再验证承接', danger: true }
-  return { action: '持有', detail: '趋势未触发退出条件，保留仓位并严格执行止损', danger: false }
+  if (position.decision) return {
+    action: position.decision.action,
+    detail: position.decision.summary,
+    danger: ['立即减仓', '减仓', '收紧仓位'].includes(position.decision.action),
+  }
+  return { action: '等待诊断', detail: '多维数据尚未覆盖，除硬止损外不根据单日涨跌机械减仓', danger: false }
 }
 
 function marketCommand(report: DailyReport | null, recommendation: RecommendationData | null) {
+  if (report?.decision) {
+    const score = report.decision.score
+    return {
+      label: report.decision.action,
+      cap: `仓位上限${report.decision.position_cap ?? 40}%`,
+      action: report.decision.summary,
+      evidence: report.decision.evidence,
+      tone: score >= 58 ? 'red' as const : score < 46 ? 'green' as const : 'blue' as const,
+    }
+  }
   const indexPcts = (report?.indices ?? []).map(x => Number(x.pct || 0))
   const avg = indexPcts.length ? indexPcts.reduce((sum, value) => sum + value, 0) / indexPcts.length : 0
   const sentiment = recommendation?.market_sentiment || report?.sentiment?.label || '中性'
   if (sentiment.includes('偏空') || avg <= -0.8) {
-    return { label: '防守', cap: '仓位上限30%', action: '先处理弱持仓，不开无催化新仓', tone: 'green' as const }
+    return { label: '防守', cap: '仓位上限30%', action: '先处理弱持仓，不开无催化新仓', evidence: undefined, tone: 'green' as const }
   }
   if (sentiment.includes('偏多') || avg >= 0.35) {
-    return { label: '进攻', cap: '仓位上限70%', action: '只做前三强催化，分两笔确认后进场', tone: 'red' as const }
+    return { label: '进攻', cap: '仓位上限70%', action: '只做前三强催化，分两笔确认后进场', evidence: undefined, tone: 'red' as const }
   }
-  return { label: '结构进攻', cap: '仓位上限50%', action: '聚焦强板块和强个股，弱势方向直接放弃', tone: 'blue' as const }
+  return { label: '结构进攻', cap: '仓位上限50%', action: '聚焦强板块和强个股，弱势方向直接放弃', evidence: undefined, tone: 'blue' as const }
+}
+
+function dimensionLine(decision?: MultiDecision) {
+  if (!decision?.dimensions?.length) return '多维证据读取中'
+  return decision.dimensions.slice(0, 5).map(item => `${item.label}${Math.round(item.score)}`).join(' · ')
 }
 
 function SectionTitle({ icon: Icon, title, summary }: { icon: typeof Activity; title: string; summary: string }) {
@@ -212,9 +252,9 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
         fetch('/api/portfolio/sell-guidance'),
         fetch(phase === 'premarket' ? '/api/recommend/tomorrow' : '/api/recommend/today'),
         fetch('/api/daily-report'),
+        fetch('/api/industry/summary'),
       ]
       if (quoteUrl) requests.push(fetch(quoteUrl))
-      if (phase === 'intraday') requests.push(fetch('/api/industry/summary'))
       const responses = await Promise.all(requests)
       const payloads = await Promise.all(responses.map(async response => response.ok ? response.json() : {}))
       setStatus(payloads[0] as MarketStatus)
@@ -222,14 +262,14 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
       setGuidance((payloads[2]?.guidance ?? {}) as Record<string, GuidanceEntry>)
       setRecommendation(payloads[3] as RecommendationData)
       setDaily(payloads[4] as DailyReport)
-      let cursor = 5
+      setIndustry(payloads[5] as IndustryData)
+      let cursor = 6
       if (quoteUrl) {
         setQuotes((payloads[cursor]?.stocks ?? []) as Quote[])
         cursor += 1
       } else {
         setQuotes([])
       }
-      if (phase === 'intraday') setIndustry(payloads[cursor] as IndustryData)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '数据读取失败')
     } finally {
@@ -249,11 +289,12 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
     () => portfolio.positions.map(position => ({ position, ...positionDecision(position, guidance[position.symbol]) })),
     [guidance, portfolio.positions],
   )
-  const urgent = decisions.filter(item => item.action !== '持有')
+  const isHoldAction = (action: string) => action.includes('持有')
+  const urgent = decisions.filter(item => !isHoldAction(item.action))
   const candidates = (recommendation?.stocks ?? []).slice(0, 3)
   const watchRows = quotes
     .map(quote => ({ ...quote, item: watchlist.find(item => item.code === quote.symbol) }))
-    .sort((a, b) => b.pct_change - a.pct_change)
+    .sort((a, b) => Number(b.decision?.score ?? 50) - Number(a.decision?.score ?? 50))
     .slice(0, 6)
 
   if (portfolioOpen) {
@@ -306,7 +347,7 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
       {error && <div className="mb-4 border-l-2 border-red-500 bg-red-950/20 px-3 py-2 text-sm text-red-300">{error}</div>}
       {recommendation?.error && (
         <div className="mb-4 flex items-center gap-2 border-l-2 border-red-500 bg-red-950/20 px-3 py-2 text-sm text-red-200">
-          <CircleAlert className="h-4 w-4 shrink-0" />推荐引擎额度不足，本阶段不依据缺失信号开新仓。充值或更换 DeepSeek Key 后刷新恢复。
+          <CircleAlert className="h-4 w-4 shrink-0" />推荐引擎当前不可用，本阶段不依据缺失信号开新仓。请检查方舟模型服务后刷新。
         </div>
       )}
 
@@ -325,6 +366,12 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
             <div className="mt-1 text-sm font-medium leading-6 text-gray-200">{command.action}</div>
           </div>
         </div>
+        {(command.evidence?.positive?.length || command.evidence?.negative?.length) && (
+          <div className="flex flex-wrap gap-x-5 gap-y-1 border-t border-gray-800 px-4 py-2 text-xs text-gray-500">
+            {command.evidence?.positive?.[0] && <span className="text-red-300">进攻证据：{command.evidence.positive[0]}</span>}
+            {command.evidence?.negative?.[0] && <span className="text-emerald-300">风险证据：{command.evidence.negative[0]}</span>}
+          </div>
+        )}
       </section>
 
       <div className="space-y-4">
@@ -336,7 +383,7 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
           />
           {loading ? <LoadingLine /> : decisions.length ? (
             <div className="divide-y divide-gray-800">
-              {(isPremarket ? decisions : [...urgent, ...decisions.filter(item => item.action === '持有')]).map(({ position, action, detail, danger }) => (
+              {(isPremarket ? decisions : [...urgent, ...decisions.filter(item => isHoldAction(item.action))]).map(({ position, action, detail, danger }) => (
                 <button
                   key={position.symbol}
                   onClick={() => onSelectStock?.(position.symbol, position.name)}
@@ -387,8 +434,8 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
                     <div className={pctClass(stock.pct_change)}>{percent(stock.pct_change)}</div>
                   </div>
                   <div>
-                    <div className="text-sm leading-5 text-gray-300">{stock.strategy || stock.reasons?.[0] || '按计划分批进场'}</div>
-                    <div className="mt-1 text-xs text-gray-600">{stock.catalyst_type || stock.tags?.join(' · ') || '量价与消息面共振'}</div>
+                    <div className="text-sm leading-5 text-gray-300"><span className="mr-2 font-semibold text-blue-300">{stock.decision?.action || '等待触发'}</span>{stock.decision?.summary || stock.strategy || stock.reasons?.[0]}</div>
+                    <div className="mt-1 text-xs text-gray-600">{dimensionLine(stock.decision)}</div>
                   </div>
                   <ChevronRight className="hidden h-4 w-4 text-gray-600 sm:block" />
                 </button>
@@ -404,11 +451,11 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
         </section>
 
         <section className="overflow-hidden rounded border border-gray-800 bg-gray-900/50">
-          <SectionTitle icon={Target} title="自选任务" summary={`${watchlist.length} 只自选，按当日强弱排序`} />
+          <SectionTitle icon={Target} title="自选任务" summary={`${watchlist.length} 只自选，按多维决策分排序，涨跌幅仅作证据`} />
           {loading ? <LoadingLine /> : watchRows.length ? (
             <div className="divide-y divide-gray-800">
               {watchRows.map((quote, index) => {
-                const action = quote.pct_change >= 3 ? '保留强势' : quote.pct_change <= -2 ? '移出候选' : '等待突破'
+                const action = quote.decision?.action || '数据待补'
                 return (
                   <button
                     key={quote.symbol}
@@ -418,7 +465,10 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
                     <span className="text-xs text-gray-600">{index + 1}</span>
                     <div><div className="text-sm font-medium text-white">{quote.name || quote.item?.name || quote.symbol}</div><div className="text-xs text-gray-600">{quote.symbol}</div></div>
                     <div className={pctClass(quote.pct_change)}>{percent(quote.pct_change)}</div>
-                    <div className="hidden text-sm text-gray-400 sm:block"><span className="font-medium text-blue-300">{action}</span> · {quote.pct_change >= 3 ? '强于普通波动，等待回踩确认' : quote.pct_change <= -2 ? '当日明显转弱，不占用观察名额' : '尚未形成可交易优势'}</div>
+                    <div className="hidden sm:block">
+                      <div className="text-sm text-gray-400"><span className="font-medium text-blue-300">{action}</span> · {quote.decision?.summary || '等待趋势、量价与板块证据补齐'}</div>
+                      <div className="mt-1 text-xs text-gray-600">决策 {quote.decision?.score ?? '--'}分 · {dimensionLine(quote.decision)}</div>
+                    </div>
                     <ChevronRight className="hidden h-4 w-4 text-gray-600 sm:block" />
                   </button>
                 )
@@ -446,13 +496,13 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
             <div>
               <div className="mb-2 text-xs font-medium text-red-300">强势方向</div>
               <p className="text-sm leading-6 text-gray-300">
-                {(industry?.industries ?? daily?.sectors?.top_up ?? []).slice(0, 4).map(item => `${item.name} ${'pct_num' in item ? percent(item.pct_num) : percent(item.pct)}`).join(' · ') || '暂无可验证的强势板块'}
+                {(industry?.industries ?? []).filter(item => ['主线候选', '轮动观察'].includes(item.decision?.action || '')).slice(0, 4).map(item => `${item.name} ${item.decision?.score ?? '--'}分·${item.decision?.action}`).join(' · ') || '暂无通过广度、资金和龙头共同验证的强势板块'}
               </p>
             </div>
             <div>
               <div className="mb-2 text-xs font-medium text-emerald-300">回避方向</div>
               <p className="text-sm leading-6 text-gray-300">
-                {(daily?.sectors?.top_down ?? []).slice(0, 4).map(item => `${item.name} ${percent(item.pct)}`).join(' · ') || '暂无可验证的弱势板块'}
+                {(industry?.industries ?? []).filter(item => item.decision?.action === '弱势回避').sort((a, b) => Number(a.decision?.score ?? 50) - Number(b.decision?.score ?? 50)).slice(0, 4).map(item => `${item.name} ${item.decision?.score ?? '--'}分·弱势回避`).join(' · ') || '暂无多维证据一致的弱势板块'}
               </p>
             </div>
           </div>
