@@ -284,6 +284,15 @@ def _on_startup():
 def health():
     out: dict = {"status": "ok"}
     try:
+        from services.ai_client import current_model, web_search_status
+        out["ai"] = {
+            "provider": "volcengine_ark",
+            "model": current_model(),
+            "web_search": web_search_status(),
+        }
+    except Exception:
+        pass
+    try:
         from data.stock_data import get_baostock_health
         out["baostock"] = get_baostock_health()
     except Exception:
