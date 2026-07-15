@@ -1,0 +1,61 @@
+{
+  "env": {
+    "REMEMBER_BRAIN_PATH": "/Users/wangzhe45/Desktop/股票分析/remember"
+  },
+  "permissions": {
+    "additionalDirectories": ["/Users/wangzhe45/Desktop/股票分析/remember"],
+    "allow": [
+      "Bash(* /Users/wangzhe45/Desktop/股票分析/remember*)",
+      "Bash(echo *)",
+      "Read(~/.claude/**)",
+      "Edit(~/.claude/**)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/wangzhe45/Desktop/股票分析/remember/scripts/surface_status.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/wangzhe45/Desktop/股票分析/remember/scripts/log_change.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/wangzhe45/Desktop/股票分析/remember/scripts/snapshot.sh",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/wangzhe45/Desktop/股票分析/remember/scripts/snapshot.sh",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

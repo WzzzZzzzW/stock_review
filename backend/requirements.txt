@@ -1,0 +1,20 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+akshare>=1.18.0
+pandas>=2.2.0
+pandas-ta>=0.4.67b0
+numpy>=2.2.6
+openai==1.54.0
+python-dotenv==1.0.1
+httpx==0.27.2
+pydantic==2.9.2
+pydantic-settings==2.6.1
+apscheduler>=3.10.0
+
+# ── 数据源 / 解析（之前漏写、实际在用，缺了对应功能会崩） ──
+baostock==0.9.1          # 技术指标(MA/RSI/MACD)、卖点诊断、批量复盘
+beautifulsoup4==4.14.3   # 新闻 / RSS 解析
+lxml>=5.0.0              # bs4 解析后端 / akshare
+requests>=2.31.0         # akshare 及多处直接调用
+mini-racer==0.14.1       # 同花顺行业数据需要执行 JS（代码里 import py_mini_racer）
+pypinyin>=0.50.0         # 股票名拼音首字母搜索（可选，缺了仅拼音搜索降级）

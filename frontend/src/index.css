@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-gray-950 text-gray-100 font-sans;
+}
+
+/* ── Markdown 报告样式 ──────────────────────────────── */
+.report-content h1 {
+  @apply text-xl font-bold text-white mt-8 mb-3 pb-2 border-b border-gray-700;
+}
+.report-content h2 {
+  @apply text-base font-bold text-blue-300 mt-7 mb-2 pb-1 border-b border-blue-900/50;
+}
+.report-content h3 {
+  @apply text-sm font-semibold text-gray-200 mt-4 mb-1.5;
+}
+.report-content p {
+  @apply text-gray-300 leading-relaxed mb-2.5 text-sm;
+}
+.report-content ul {
+  @apply list-disc pl-5 space-y-1.5 text-gray-300 text-sm mb-3;
+}
+.report-content ol {
+  @apply list-decimal pl-5 space-y-1.5 text-gray-300 text-sm mb-3;
+}
+.report-content li {
+  @apply leading-relaxed;
+}
+.report-content li > p {
+  @apply mb-0;
+}
+.report-content strong {
+  @apply text-white font-semibold;
+}
+.report-content em {
+  @apply text-gray-400 not-italic;
+}
+.report-content blockquote {
+  @apply border-l-4 border-blue-500/60 pl-4 text-gray-400 my-3 bg-blue-950/20 py-2 pr-3 rounded-r;
+}
+.report-content hr {
+  @apply border-gray-800 my-5;
+}
+
+/* 表格 */
+.report-content table {
+  @apply w-full text-sm border-collapse my-4 rounded overflow-hidden;
+}
+.report-content thead {
+  @apply bg-gray-800/80;
+}
+.report-content th {
+  @apply text-xs text-gray-300 font-semibold text-left px-3 py-2 border border-gray-700;
+}
+.report-content td {
+  @apply text-gray-300 text-xs px-3 py-2 border border-gray-800;
+}
+.report-content tbody tr:nth-child(even) td {
+  @apply bg-gray-900/40;
+}
+.report-content tbody tr:hover td {
+  @apply bg-blue-900/10;
+}
+
+/* 免责声明 */
+.report-content p:last-child {
+  @apply text-gray-600 text-xs mt-6 pt-4 border-t border-gray-800;
+}

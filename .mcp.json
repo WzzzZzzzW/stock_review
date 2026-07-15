@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "remember": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@remember-md/mcp"
+      ],
+      "env": {
+        "REMEMBER_BRAIN_PATH": "./remember"
+      }
+    }
+  }
+}
