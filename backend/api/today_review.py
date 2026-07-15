@@ -10,9 +10,11 @@ from datetime import datetime
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from db import watchlist_db
 from db.today_review_db import init_db, save_daily, get_daily, list_dates, get_latest_date
+from services.market_clock import can_generate_review, get_market_status
 from services.today_review_service import build_today_review
 
 router = APIRouter(prefix="/api/today-review", tags=["今日复盘"])
@@ -26,7 +28,7 @@ class WatchItem(BaseModel):
 
 class GenerateReq(BaseModel):
     date: str | None = None
-    watchlist: list[WatchItem] = []
+    watchlist: list[WatchItem] = Field(default_factory=list)
 
 
 init_db()
@@ -53,7 +55,8 @@ def _do_generate(trade_date: str, watchlist: list[dict] | None = None):
         def _cb(msg: str):
             _status["progress"] = msg
 
-        payload = build_today_review(trade_date, watchlist=watchlist or [], progress_cb=_cb)
+        active_watchlist = watchlist if watchlist is not None else watchlist_db.list_items()
+        payload = build_today_review(trade_date, watchlist=active_watchlist, progress_cb=_cb)
         save_daily(trade_date, payload)
         _status = {
             "running": False,
@@ -84,10 +87,22 @@ def daily(date: str | None = None):
 def generate(req: GenerateReq):
     if _lock.locked():
         return JSONResponse({"ok": False, "message": "正在生成中，请稍候", "status": _status})
-    target = req.date or datetime.today().strftime("%Y-%m-%d")
+    market_status = get_market_status()
+    target = req.date or market_status["today"]
+    if not can_generate_review(target):
+        return JSONResponse({
+            "ok": False,
+            "message": "盘后复盘仅在交易日15:10后生成；盘中数据不会写入日档案",
+            "market_status": market_status,
+        }, status_code=409)
+
     watchlist = [x.model_dump() for x in req.watchlist]
-    if not watchlist:
-        watchlist = _saved_watchlist_for(target)
+    if watchlist:
+        watchlist_db.merge_items(watchlist)
+    elif target == market_status["today"]:
+        watchlist = watchlist_db.list_items()
+    else:
+        watchlist = _saved_watchlist_for(target) or watchlist_db.list_items()
 
     def run():
         with _lock:
@@ -99,4 +114,4 @@ def generate(req: GenerateReq):
 
 @router.get("/status")
 def status():
-    return JSONResponse(_status)
+    return JSONResponse({**_status, "market_status": get_market_status()})

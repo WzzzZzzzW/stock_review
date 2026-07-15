@@ -543,9 +543,9 @@ export default function WatchlistPage({ onSelectStock, view }: Props) {
       if (!res.ok) throw new Error('行情获取失败')
       return res.json()
     },
-    enabled: watchlist.length > 0,
+    enabled: activeTab === 'watchlist' && watchlist.length > 0,
     staleTime: 60_000,
-    refetchInterval: 60_000,
+    refetchInterval: activeTab === 'watchlist' ? 60_000 : false,
   })
 
   // ── 今日推荐 ────────────────────────────────────────────────────────────────

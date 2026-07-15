@@ -21,8 +21,8 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/api/recommend", tags=["推荐v3"])
 
-_TODAY_CACHE    = {"data": [], "ts": 0.0, "date": "", "at": "", "themes": [], "sentiment": "中性", "news_latest": ""}
-_TOMORROW_CACHE = {"data": [], "ts": 0.0, "date": "", "themes": [], "sentiment": "中性", "news_latest": ""}
+_TODAY_CACHE    = {"data": [], "ts": 0.0, "date": "", "at": "", "themes": [], "sentiment": "中性", "news_latest": "", "error": "", "ready": False}
+_TOMORROW_CACHE = {"data": [], "ts": 0.0, "date": "", "themes": [], "sentiment": "中性", "news_latest": "", "error": "", "ready": False}
 
 # 重建并发锁：避免「页面刷新 + 定时器」同时触发两次 AI 调用
 import threading as _threading
@@ -431,9 +431,9 @@ def _apply_brain_rules(candidates: list[dict], hot_themes: list[str], sentiment:
 
 # ── 主推荐流程 ────────────────────────────────────────────────────────────────
 
-def _build_recommendations(mode: str) -> tuple[list[dict], list[str], str, str]:
+def _build_recommendations(mode: str) -> tuple[list[dict], list[str], str, str, str]:
     """
-    构建推荐列表，返回 (stocks, hot_themes, market_sentiment, news_latest)
+    构建推荐列表，返回 (stocks, hot_themes, market_sentiment, news_latest, error)
     news_latest = 本次所用最新一条新闻的发布时间（消息面截止时间）
     """
     # ① 获取新闻
@@ -446,9 +446,10 @@ def _build_recommendations(mode: str) -> tuple[list[dict], list[str], str, str]:
     ai_stocks  = ai_result.get("stocks") or []
     hot_themes = ai_result.get("hot_themes") or []
     sentiment  = ai_result.get("market_sentiment") or "中性"   # 兜住 None/空串（LLM 偶发返回 null）
+    error = str(ai_result.get("error") or "")
 
     if not ai_stocks:
-        return [], hot_themes, sentiment, news_latest
+        return [], hot_themes, sentiment, news_latest, error
 
     # ③ 解析股票代码
     names    = [s["name"] for s in ai_stocks]
@@ -604,7 +605,7 @@ def _build_recommendations(mode: str) -> tuple[list[dict], list[str], str, str]:
     except Exception as e:
         print(f"[recommend] 历史记录保存失败: {e}")
 
-    return final, hot_themes, sentiment, news_latest
+    return final, hot_themes, sentiment, news_latest, error
 
 
 def _build_tags(ai_stock: dict, lhb_amt: float, north_signal: float, sec_pct: float) -> list[str]:
@@ -651,6 +652,9 @@ def warm_today_cache(force: bool = False) -> bool:
     - 锁 + force=False 时若缓存仍新则跳过，避免并发重复跑 AI
     返回 True=已重建，False=跳过
     """
+    from services.market_clock import get_market_status
+    if get_market_status()["phase"] != "intraday":
+        return False
     now = time.time()
     today = date.today().isoformat()
     if not force and _TODAY_CACHE["date"] == today and now - _TODAY_CACHE["ts"] < _TODAY_TTL:
@@ -658,11 +662,12 @@ def warm_today_cache(force: bool = False) -> bool:
     if not _TODAY_REBUILD_LOCK.acquire(blocking=False):
         return False
     try:
-        stocks, themes, sentiment, news_latest = _build_recommendations("today")
+        stocks, themes, sentiment, news_latest, error = _build_recommendations("today")
         _TODAY_CACHE.update({
             "data": stocks, "themes": themes, "ts": time.time(),
             "date": today, "at": datetime.now().strftime("%H:%M:%S"),
             "sentiment": sentiment, "news_latest": news_latest,
+            "error": error, "ready": True,
         })
         return True
     except Exception as e:
@@ -674,6 +679,9 @@ def warm_today_cache(force: bool = False) -> bool:
 
 def warm_tomorrow_cache(force: bool = False) -> bool:
     """后台预热「明日预判」缓存，与 warm_today_cache 同口径。"""
+    from services.market_clock import get_market_status
+    if get_market_status()["phase"] == "intraday":
+        return False
     now = time.time()
     today = date.today().isoformat()
     if not force and _TOMORROW_CACHE["date"] == today and now - _TOMORROW_CACHE["ts"] < _TOMORROW_TTL:
@@ -681,10 +689,11 @@ def warm_tomorrow_cache(force: bool = False) -> bool:
     if not _TOMORROW_REBUILD_LOCK.acquire(blocking=False):
         return False
     try:
-        stocks, themes, sentiment, news_latest = _build_recommendations("tomorrow")
+        stocks, themes, sentiment, news_latest, error = _build_recommendations("tomorrow")
         _TOMORROW_CACHE.update({
             "data": stocks, "themes": themes, "ts": time.time(),
             "date": today, "sentiment": sentiment, "news_latest": news_latest,
+            "error": error, "ready": True,
         })
         return True
     except Exception as e:
@@ -704,8 +713,17 @@ def get_today_recommend():
     """
     now   = time.time()
     today = date.today().isoformat()
-    has_cache = _TODAY_CACHE["data"] and _TODAY_CACHE["date"] == today
+    has_cache = bool(_TODAY_CACHE.get("ready") and _TODAY_CACHE["date"] == today)
     is_fresh  = has_cache and now - _TODAY_CACHE["ts"] < _TODAY_TTL
+
+    from services.market_clock import get_market_status
+    if get_market_status()["phase"] != "intraday" and not has_cache:
+        return JSONResponse({
+            "stocks": [], "hot_themes": [], "market_sentiment": "中性",
+            "updated_at": "", "news_latest": "", "date": today,
+            "cached": False, "unavailable": True,
+            "message": "盘中机会仅在交易时段生成",
+        })
 
     # 有当日缓存（无论是否过期）→ 立即返回；若过期则后台异步刷新
     if has_cache:
@@ -718,23 +736,25 @@ def get_today_recommend():
             "market_sentiment": _TODAY_CACHE.get("sentiment", "中性"),
             "updated_at": _TODAY_CACHE["at"],
             "news_latest": _TODAY_CACHE.get("news_latest", ""),
+            "error":      _TODAY_CACHE.get("error", ""),
             "date":       today,
             "cached":     True,
             "stale":      not is_fresh,
         })
 
     # 冷启动：无缓存（启动补跑还没跑完或失败）→ 同步生成
-    stocks, themes, sentiment, news_latest = _build_recommendations("today")
+    stocks, themes, sentiment, news_latest, error = _build_recommendations("today")
     at = datetime.now().strftime("%H:%M:%S")
     _TODAY_CACHE.update({
         "data": stocks, "themes": themes, "ts": time.time(),
-        "date": today, "at": at, "sentiment": sentiment, "news_latest": news_latest
+        "date": today, "at": at, "sentiment": sentiment, "news_latest": news_latest,
+        "error": error, "ready": True,
     })
     return JSONResponse({
         "stocks": stocks, "hot_themes": themes,
         "market_sentiment": sentiment,
         "updated_at": at, "news_latest": news_latest,
-        "date": today, "cached": False,
+        "date": today, "cached": False, "error": error,
     })
 
 
@@ -743,8 +763,16 @@ def get_tomorrow_recommend():
     """明日预判（stale-while-revalidate，与 today 同口径；8h TTL）"""
     now   = time.time()
     today = date.today().isoformat()
-    has_cache = _TOMORROW_CACHE["data"] and _TOMORROW_CACHE["date"] == today
+    has_cache = bool(_TOMORROW_CACHE.get("ready") and _TOMORROW_CACHE["date"] == today)
     is_fresh  = has_cache and now - _TOMORROW_CACHE["ts"] < _TOMORROW_TTL
+
+    from services.market_clock import get_market_status
+    if get_market_status()["phase"] == "intraday" and not has_cache:
+        return JSONResponse({
+            "stocks": [], "hot_themes": [], "market_sentiment": "中性",
+            "news_latest": "", "date": today, "cached": False,
+            "unavailable": True, "message": "下一交易日计划在盘前或盘后生成",
+        })
 
     if has_cache:
         if not is_fresh:
@@ -755,21 +783,23 @@ def get_tomorrow_recommend():
             "hot_themes": _TOMORROW_CACHE["themes"],
             "market_sentiment": _TOMORROW_CACHE.get("sentiment", "中性"),
             "news_latest": _TOMORROW_CACHE.get("news_latest", ""),
+            "error":      _TOMORROW_CACHE.get("error", ""),
             "date":       today,
             "cached":     True,
             "stale":      not is_fresh,
         })
 
-    stocks, themes, sentiment, news_latest = _build_recommendations("tomorrow")
+    stocks, themes, sentiment, news_latest, error = _build_recommendations("tomorrow")
     _TOMORROW_CACHE.update({
         "data": stocks, "themes": themes, "ts": time.time(), "date": today,
-        "sentiment": sentiment, "news_latest": news_latest
+        "sentiment": sentiment, "news_latest": news_latest,
+        "error": error, "ready": True,
     })
     return JSONResponse({
         "stocks": stocks, "hot_themes": themes,
         "market_sentiment": sentiment,
         "news_latest": news_latest,
-        "date": today, "cached": False,
+        "date": today, "cached": False, "error": error,
     })
 
 

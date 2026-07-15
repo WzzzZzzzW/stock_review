@@ -105,10 +105,10 @@ export default function StrategyBacktest({ ohlcv }: Props) {
           <Tooltip
             contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 }}
             labelStyle={{ color: '#9ca3af' }}
-            formatter={(v: number, name: string) => [
-              `${v > 100 ? '+' : ''}${(v - 100).toFixed(2)}%`,
-              name,
-            ]}
+            formatter={(value, name) => {
+              const v = Number(value ?? 0)
+              return [`${v > 100 ? '+' : ''}${(v - 100).toFixed(2)}%`, String(name)] as [string, string]
+            }}
           />
           <Legend
             wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
@@ -158,7 +158,10 @@ export default function StrategyBacktest({ ohlcv }: Props) {
               <YAxis tick={TICK_STYLE} tickFormatter={v => `${v}%`} />
               <Tooltip
                 contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 11 }}
-                formatter={(v: number) => [`${v > 0 ? '+' : ''}${v}%`]}
+                formatter={(value) => {
+                  const v = Number(value ?? 0)
+                  return [`${v > 0 ? '+' : ''}${v}%`, '收益'] as [string, string]
+                }}
               />
               {strategies.map(s => (
                 <Bar key={s.name} dataKey={`returns.${s.name}`} name={s.name} fill={s.color} radius={[2, 2, 0, 0]}>

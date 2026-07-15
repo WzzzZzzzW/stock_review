@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { RefreshCw } from 'lucide-react'
 import { useWatchlist } from '../stores/watchlistStore'
 
 type DateRow = {
@@ -9,6 +10,14 @@ type DateRow = {
   position_count: number
   watch_count: number
   generated_at: string
+}
+
+type MarketStatus = {
+  phase: 'premarket' | 'intraday' | 'postmarket'
+  label: string
+  today: string
+  completed_trade_date: string
+  can_generate_postmarket: boolean
 }
 
 type Stock = {
@@ -972,6 +981,7 @@ function CalendarPicker({
   open,
   month,
   generating,
+  canGenerateToday,
   onOpenChange,
   onSelect,
   onMonthChange,
@@ -983,6 +993,7 @@ function CalendarPicker({
   open: boolean
   month: Date
   generating: boolean
+  canGenerateToday: boolean
   onOpenChange: (open: boolean) => void
   onSelect: (date: string) => void
   onMonthChange: (month: Date) => void
@@ -1020,6 +1031,7 @@ function CalendarPicker({
   const handleDayClick = (date: string) => {
     if (isWeekend(date) || date > today) return
     if (existing.has(date)) onSelect(date)
+    else if (date === today && !canGenerateToday) onSelect(date)
     else onGenerate(date)
     onOpenChange(false)
   }
@@ -1087,7 +1099,7 @@ function CalendarPicker({
                   onClick={() => handleDayClick(date)}
                   disabled={generating}
                   className={`${baseCls} ${isSelected ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-500 hover:bg-red-900/40 hover:text-red-300'} ${isToday ? 'ring-1 ring-amber-400' : ''} ${generating ? 'cursor-wait opacity-40' : ''}`}
-                  title={isToday ? '今日待生成，点击触发' : `${date} 暂无数据，点击触发后台生成`}
+                  title={isToday && !canGenerateToday ? '今日尚未收盘，15:10后才能生成日档案' : (isToday ? '今日待生成，点击触发' : `${date} 暂无数据，点击触发后台生成`)}
                 >
                   {cell.day}
                 </button>
@@ -1100,7 +1112,7 @@ function CalendarPicker({
             <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded border border-gray-700 bg-gray-800" />未生成</span>
             <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-blue-600" />当前</span>
           </div>
-          <p className="mt-1.5 text-[10px] leading-relaxed text-gray-600">💡 点已有数据查看 · 点未生成日期自动后台补齐（约2-3分钟）</p>
+          <p className="mt-1.5 text-[10px] leading-relaxed text-gray-600">点已有档案查看 · 历史缺档可手动补齐 · 当日15:10后生成</p>
         </div>
       )}
     </div>
@@ -1116,6 +1128,7 @@ export default function TodayReviewPage() {
   const [data, setData] = useState<TodayReview | null>(null)
   const [message, setMessage] = useState('')
   const [status, setStatus] = useState<{ running?: boolean; progress?: string }>({})
+  const [marketStatus, setMarketStatus] = useState<MarketStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [requestedDates, setRequestedDates] = useState<Set<string>>(() => new Set())
   const [rankTab, setRankTab] = useState<'gainers' | 'losers' | 'amount' | 'turnover'>('gainers')
@@ -1153,10 +1166,28 @@ export default function TodayReviewPage() {
     const d = await r.json()
     setMessage(d.message ?? '')
     setStatus(d.status ?? {})
+    if (d.market_status) setMarketStatus(d.market_status)
   }
 
   useEffect(() => {
-    loadDates().catch(() => {})
+    Promise.all([
+      fetch('/api/trading-day/status').then(r => r.json()),
+      fetch('/api/today-review/dates').then(r => r.json()),
+    ]).then(([clock, archive]) => {
+      const rows = (archive.dates ?? []) as DateRow[]
+      setMarketStatus(clock as MarketStatus)
+      setDates(rows)
+      if (clock.phase === 'postmarket') {
+        setSelected(clock.today)
+      } else {
+        const completed = rows.some(row => row.date === clock.completed_trade_date)
+          ? clock.completed_trade_date
+          : rows[0]?.date
+        if (completed) setSelected(completed)
+      }
+    }).catch(() => {
+      loadDates().catch(() => {})
+    })
   }, [])
 
   useEffect(() => {
@@ -1165,27 +1196,19 @@ export default function TodayReviewPage() {
   }, [selected])
 
   useEffect(() => {
-    if (!loading && !data && message && !status.running && !requestedDates.has(selected)) {
+    const canAutoGenerate = marketStatus?.can_generate_postmarket && selected === marketStatus.today
+    if (canAutoGenerate && !loading && !data && message && !status.running && !requestedDates.has(selected)) {
       setRequestedDates(prev => new Set(prev).add(selected))
       generate(selected).catch(() => {})
     }
-  }, [selected, loading, data, message, status.running, requestedDates])
+  }, [selected, loading, data, message, status.running, requestedDates, marketStatus])
 
   useEffect(() => {
-    if (!data || loading || status.running) return
-    const savedCount = Number(data.watchlist?.summary?.count ?? 0)
-    const localCount = watchPayload.length
-    const key = `watch-sync:${selected}:${localCount}:${savedCount}`
-    if (localCount > 0 && savedCount !== localCount && !requestedDates.has(key)) {
-      setRequestedDates(prev => new Set(prev).add(key))
-      generate(selected).catch(() => {})
-    }
-  }, [data, loading, status.running, selected, watchPayload, requestedDates])
-
-  useEffect(() => {
+    if (!status.running) return
     const t = window.setInterval(async () => {
       const r = await fetch('/api/today-review/status')
       const s = await r.json()
+      if (s.market_status) setMarketStatus(s.market_status)
       setStatus(s)
       if (!s.running && status.running) {
         await loadDates()
@@ -1206,10 +1229,14 @@ export default function TodayReviewPage() {
     <main className="mx-auto max-w-7xl px-4 py-5">
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <div className="text-xs text-gray-500">今日闭环</div>
-          <h1 className="mt-1 text-2xl font-bold text-white">今日复盘</h1>
+          <div className="text-xs text-gray-500">盘后闭环</div>
+          <h1 className="mt-1 text-2xl font-bold text-white">盘后日档案</h1>
           <div className="mt-1 text-sm text-gray-500">
-            {data ? `${data.trade_date} · ${fmtTime(data.generated_at)} 保存` : message || '读取中...'}
+            {data
+              ? `${data.trade_date} · ${fmtTime(data.generated_at)} 保存`
+              : selected === marketStatus?.today && !marketStatus.can_generate_postmarket
+                ? '交易尚未闭环，当日日档案将在15:10后生成'
+                : message || '读取中...'}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1220,6 +1247,7 @@ export default function TodayReviewPage() {
             open={calendarOpen}
             month={calendarMonth}
             generating={!!status.running}
+            canGenerateToday={!!marketStatus?.can_generate_postmarket}
             onOpenChange={setCalendarOpen}
             onMonthChange={setCalendarMonth}
             onSelect={date => {
@@ -1232,23 +1260,25 @@ export default function TodayReviewPage() {
           />
           <button
             onClick={() => generate(selected)}
-            disabled={!!status.running}
-            className="rounded bg-red-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-500"
+            disabled={!!status.running || (selected === marketStatus?.today && !marketStatus?.can_generate_postmarket)}
+            className="inline-flex h-8 items-center gap-2 rounded bg-red-600 px-3 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-500"
+            title={selected === marketStatus?.today && !marketStatus?.can_generate_postmarket ? '交易日15:10后才能生成当日日档案' : '重新生成当前日档案'}
           >
-            {status.running ? '生成中' : '🔄 重新生成'}
+            <RefreshCw className={`h-4 w-4 ${status.running ? 'animate-spin' : ''}`} />
+            {status.running ? '生成中' : '重新生成'}
           </button>
         </div>
       </div>
 
       {status.running && (
         <div className="mb-4 rounded-lg border border-blue-800 bg-blue-950/30 px-4 py-3 text-sm text-blue-200">
-          {status.progress || '正在生成今日复盘...'}
+          {status.progress || '正在生成盘后日档案...'}
         </div>
       )}
 
       {!data && !status.running ? (
         <div className="rounded-lg border border-gray-800 bg-gray-900 p-8 text-center text-gray-400">
-          {loading ? '读取中...' : message || '暂无今日复盘'}
+          {loading ? '读取中...' : message || '暂无日档案'}
         </div>
       ) : data ? (
         <div className="space-y-4">

@@ -32,7 +32,7 @@ function timeAgo(s: string): string {
   } catch { return '' }
 }
 
-function trendingToFeed(it: TrendingItem, market: 'cn' | 'intl'): FeedItem {
+function trendingToFeed(it: TrendingItem): FeedItem {
   // 适配旧的 onAnalyze 回调（NewsImpactPage 的「分析影响」表单要 FeedItem 形状）
   return {
     title:     it.title,
@@ -151,7 +151,7 @@ function TrendingColumn({ market, onAnalyze }: { market: 'cn' | 'intl'; onAnalyz
         )}
         {items.map(it => (
           <TrendingCard key={`${market}-${it.rank}`} item={it}
-            onAnalyze={x => onAnalyze(trendingToFeed(x, market))} />
+            onAnalyze={x => onAnalyze(trendingToFeed(x))} />
         ))}
       </ol>
     </section>

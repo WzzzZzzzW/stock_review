@@ -1338,7 +1338,7 @@ function BacktestChart({ nav, bench }: { nav: BtNavPoint[]; bench: string }) {
           <XAxis dataKey="date" stroke="#6b7280" tick={{ fontSize: 10 }} interval={Math.max(1, Math.floor(data.length / 8))} />
           <YAxis stroke="#6b7280" tick={{ fontSize: 10 }} domain={['auto', 'auto']} tickFormatter={(v: number) => v.toFixed(2)} />
           <Tooltip contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 }}
-            formatter={(v: number, name: string) => [v?.toFixed?.(4), name === 'strategy' ? '策略' : bench]} />
+            formatter={(value, name) => [Number(value ?? 0).toFixed(4), name === 'strategy' ? '策略' : bench] as [string, string]} />
           <Legend wrapperStyle={{ fontSize: 12 }} formatter={(v) => v === 'strategy' ? '策略' : bench} />
           <Line type="monotone" dataKey="strategy" stroke="#10b981" strokeWidth={2} dot={false} />
           <Line type="monotone" dataKey="benchmark" stroke="#9ca3af" strokeWidth={1.5} dot={false} />

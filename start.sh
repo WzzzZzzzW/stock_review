@@ -20,7 +20,7 @@ if [ ! -d ".venv" ]; then
 else
   source .venv/bin/activate
 fi
-uvicorn main:app --reload --port 8000 &
+uvicorn main:app --reload --port 8002 &
 BACKEND_PID=$!
 cd ..
 
@@ -35,7 +35,7 @@ FRONTEND_PID=$!
 cd ..
 
 echo ""
-echo "后端: http://localhost:8000"
+echo "后端: http://localhost:8002"
 echo "前端: http://localhost:5173"
 echo ""
 echo "按 Ctrl+C 停止所有服务"

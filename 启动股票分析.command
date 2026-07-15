@@ -24,7 +24,7 @@ if [ ! -d ".venv" ]; then
 else
   source .venv/bin/activate
 fi
-uvicorn main:app --port 8000 &
+uvicorn main:app --port 8002 &
 BACKEND_PID=$!
 cd ..
 

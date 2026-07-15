@@ -149,7 +149,10 @@ export default function ScreenerPage() {
                   />
                   <Tooltip
                     contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 }}
-                    formatter={(v: number) => [`${v > 0 ? '+' : ''}${v}%`, '涨跌幅']}
+                    formatter={(value) => {
+                      const v = Number(value ?? 0)
+                      return [`${v > 0 ? '+' : ''}${v}%`, '涨跌幅'] as [string, string]
+                    }}
                   />
                   <Bar dataKey="pct_num" radius={[0, 3, 3, 0]}>
                     {top10.map((it, i) => (

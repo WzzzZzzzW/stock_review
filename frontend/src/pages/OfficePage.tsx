@@ -353,7 +353,7 @@ export default function OfficePage() {
                 </div>
               )}
 
-              {allMessages.map((m, i) => {
+              {allMessages.map(m => {
                 if (m.role === 'user') return (
                   <div key={m.id} className="flex justify-end">
                     <div className="max-w-[80%] bg-blue-600 text-white rounded-2xl rounded-br-sm px-4 py-2.5 text-sm">

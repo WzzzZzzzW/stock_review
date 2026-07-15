@@ -544,9 +544,8 @@ export default function ReviewPage({ defaultSymbol = '', defaultName = '' }: Pro
                   `股票：${data.name}(${data.symbol})`,
                   industry?.name ? `行业：${industry.name}` : '',
                   board ? `板块：${board}` : '',
-                  summary ? `区间涨跌：${summary.total_pct?.toFixed(2)}%` : '',
-                  summary?.max_dd ? `最大回撤：${summary.max_dd.toFixed(2)}%` : '',
-                  data.financial_score ? `财务评分：${data.financial_score.total_score}分(${data.financial_score.grade})` : '',
+                  summary ? `区间涨跌：${summary.total_return?.toFixed(2)}%` : '',
+                  data.financial_score ? `财务评分：${data.financial_score.score}分(${data.financial_score.grade})` : '',
                 ].filter(Boolean).join('，')} />
               </ErrorBoundary>
 

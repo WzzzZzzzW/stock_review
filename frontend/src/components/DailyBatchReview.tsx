@@ -171,7 +171,7 @@ export default function DailyBatchReview({ onSelectStock }: Props) {
 
   const result = tab === 'mine' ? mine : strong
 
-  const load = useCallback(async (which: Tab, force = false) => {
+  const load = useCallback(async (which: Tab) => {
     setLoading(true)
     setError(null)
 
@@ -282,7 +282,7 @@ export default function DailyBatchReview({ onSelectStock }: Props) {
             <span className="text-xs text-gray-600">更新于 {result.updated_at}</span>
           )}
           <button
-            onClick={() => load(tab, true)}
+            onClick={() => load(tab)}
             disabled={loading}
             className="text-xs text-blue-400 hover:text-blue-300 disabled:text-gray-600 transition-colors"
           >

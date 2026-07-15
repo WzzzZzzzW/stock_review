@@ -11,8 +11,21 @@ from datetime import datetime, date
 import akshare as ak
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from db import watchlist_db
 
 router = APIRouter(prefix="/api/watchlist", tags=["自选"])
+
+
+class WatchItemIn(BaseModel):
+    code: str
+    name: str = ""
+    date: str = ""
+
+
+class WatchSyncIn(BaseModel):
+    items: list[WatchItemIn] = Field(default_factory=list)
 
 # ── 缓存 ──────────────────────────────────────────────────────────────────────
 _hq_cache:  dict = {}   # code → {info, ts}
@@ -329,3 +342,30 @@ async def daily_recommend():
     result = get_recommendations_sync()
     at     = _rec_cache.get("at") or datetime.now().strftime("%H:%M:%S")
     return JSONResponse({"stocks": result, "date": today, "updated_at": at})
+
+
+@router.get("")
+def get_saved_watchlist():
+    items = watchlist_db.list_items()
+    return JSONResponse({"items": items, "count": len(items)})
+
+
+@router.post("")
+def add_saved_watchlist(item: WatchItemIn):
+    try:
+        saved = watchlist_db.upsert_item(item.code, item.name, item.date)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "item": saved})
+
+
+@router.post("/sync")
+def sync_saved_watchlist(body: WatchSyncIn):
+    items = watchlist_db.merge_items([item.model_dump() for item in body.items])
+    return JSONResponse({"ok": True, "items": items, "count": len(items)})
+
+
+@router.delete("/{symbol}")
+def remove_saved_watchlist(symbol: str):
+    removed = watchlist_db.delete_item(symbol)
+    return JSONResponse({"ok": True, "removed": removed})
