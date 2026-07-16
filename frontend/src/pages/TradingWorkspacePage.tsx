@@ -7,6 +7,7 @@ import {
   ChevronRight,
   CircleAlert,
   Crosshair,
+  ListPlus,
   ListChecks,
   RefreshCw,
   ShieldCheck,
@@ -21,6 +22,7 @@ interface Props {
   phase: Phase
   onSelectStock?: (symbol: string, name: string) => void
   onOpenResearch?: (section: 'market' | 'limitup' | 'lhb' | 'industry' | 'news') => void
+  onManageWatchlist?: () => void
 }
 
 interface MarketStatus {
@@ -226,7 +228,7 @@ function LoadingLine() {
   return <div className="px-4 py-6 text-sm text-gray-500">正在读取交易数据...</div>
 }
 
-export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResearch }: Props) {
+export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResearch, onManageWatchlist }: Props) {
   const watchlist = useWatchlist()
   const [status, setStatus] = useState<MarketStatus | null>(null)
   const [portfolio, setPortfolio] = useState<PortfolioData>(emptyPortfolio)
@@ -476,6 +478,15 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
             </div>
           ) : (
             <div className="px-4 py-6 text-sm text-gray-500">自选池为空。研究个股时加入自选，之后会在三个阶段自动进入任务清单。</div>
+          )}
+          {onManageWatchlist && (
+            <button
+              onClick={onManageWatchlist}
+              className="flex w-full items-center justify-between border-t border-gray-800 px-4 py-3 text-left text-sm text-blue-300 transition-colors hover:bg-gray-800/50 hover:text-blue-200"
+            >
+              <span className="inline-flex items-center gap-2"><ListPlus className="h-4 w-4" />管理自选股</span>
+              <ChevronRight className="h-4 w-4 text-gray-600" />
+            </button>
           )}
         </section>
 

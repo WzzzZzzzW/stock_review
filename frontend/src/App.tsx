@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Archive,
   Bot,
   BrainCircuit,
   BriefcaseBusiness,
   ChartNoAxesCombined,
+  ListPlus,
   Microscope,
   MoonStar,
   Sunrise,
@@ -15,12 +15,12 @@ import OfficePage from './pages/OfficePage'
 import ResearchToolsPage, { type ResearchSection } from './pages/ResearchToolsPage'
 import StrategyCenterPage from './pages/StrategyCenterPage'
 import TodayReviewPage from './pages/TodayReviewPage'
-import TradingArchivePage from './pages/TradingArchivePage'
 import TradingWorkspacePage from './pages/TradingWorkspacePage'
+import WatchlistPage from './pages/WatchlistPage'
 import ZhengxiPage from './pages/ZhengxiPage'
 
 type PhaseTab = 'premarket' | 'intraday' | 'postmarket'
-type MainTab = PhaseTab | 'office' | 'zhengxi' | 'research' | 'strategy' | 'archive'
+type MainTab = PhaseTab | 'office' | 'zhengxi' | 'research' | 'strategy' | 'watchlist'
 
 interface MarketStatus {
   phase: PhaseTab
@@ -47,7 +47,7 @@ const primaryTabs = [
 const utilityTabs = [
   { key: 'research' as const, label: '研究工具', icon: Microscope },
   { key: 'strategy' as const, label: '策略中心', icon: BrainCircuit },
-  { key: 'archive' as const, label: '日历档案', icon: Archive },
+  { key: 'watchlist' as const, label: '自选管理', icon: ListPlus },
 ]
 
 export default function App() {
@@ -135,12 +135,12 @@ export default function App() {
 
       {mainTab === 'premarket' && (
         <ErrorBoundary name="premarket">
-          <TradingWorkspacePage phase="premarket" onSelectStock={handleSelectStock} onOpenResearch={openResearch} />
+          <TradingWorkspacePage phase="premarket" onSelectStock={handleSelectStock} onOpenResearch={openResearch} onManageWatchlist={() => selectTab('watchlist')} />
         </ErrorBoundary>
       )}
       {mainTab === 'intraday' && (
         <ErrorBoundary name="intraday">
-          <TradingWorkspacePage phase="intraday" onSelectStock={handleSelectStock} onOpenResearch={openResearch} />
+          <TradingWorkspacePage phase="intraday" onSelectStock={handleSelectStock} onOpenResearch={openResearch} onManageWatchlist={() => selectTab('watchlist')} />
         </ErrorBoundary>
       )}
       {mainTab === 'postmarket' && <ErrorBoundary name="postmarket"><TodayReviewPage /></ErrorBoundary>}
@@ -158,7 +158,7 @@ export default function App() {
         </ErrorBoundary>
       )}
       {mainTab === 'strategy' && <ErrorBoundary name="strategy-center"><StrategyCenterPage onSelectStock={handleSelectStock} /></ErrorBoundary>}
-      {mainTab === 'archive' && <ErrorBoundary name="trading-archive"><TradingArchivePage onSelectStock={handleSelectStock} /></ErrorBoundary>}
+      {mainTab === 'watchlist' && <ErrorBoundary name="watchlist-management"><WatchlistPage onSelectStock={handleSelectStock} /></ErrorBoundary>}
     </div>
   )
 }
