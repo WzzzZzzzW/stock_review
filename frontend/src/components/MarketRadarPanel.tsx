@@ -7,11 +7,13 @@ import {
   CircleDot,
   Clock3,
   Landmark,
+  MessageCircleQuestion,
   Newspaper,
   Radar,
   ShieldAlert,
   Target,
 } from 'lucide-react'
+import { aiAssistantStore, type AssistantTargetType } from '../stores/aiAssistantStore'
 
 type Phase = 'premarket' | 'intraday'
 type ResearchSection = 'market' | 'limitup' | 'lhb' | 'industry' | 'news'
@@ -141,12 +143,42 @@ function SectionHead({ icon: Icon, title, meta }: { icon: typeof Radar; title: s
   )
 }
 
-function NewsRows({ rows }: { rows: NewsEvent[] }) {
+function AskAiButton({ phase, type, name, data, question }: {
+  phase: Phase
+  type: AssistantTargetType
+  name: string
+  data?: Record<string, unknown>
+  question?: string
+}) {
+  return (
+    <button
+      type="button"
+      title={`向AI询问${name}`}
+      aria-label={`向AI询问${name}`}
+      onClick={() => aiAssistantStore.open({
+        page: phase,
+        phase,
+        target: { type, name, data },
+      }, question)}
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-gray-600 hover:bg-blue-950/60 hover:text-blue-300"
+    >
+      <MessageCircleQuestion className="h-4 w-4" />
+    </button>
+  )
+}
+
+function sectorQuestion(row: SectorRow) {
+  if (row.net_in > 0 && row.pct < 0) return `为什么${row.name}净流入${money(row.net_in)}，板块却下跌${Math.abs(row.pct).toFixed(2)}%？这笔流入是否有效？`
+  if (row.net_in < 0 && row.pct > 0) return `为什么${row.name}上涨${row.pct.toFixed(2)}%，资金却净流出${Math.abs(row.net_in).toFixed(2)}亿？`
+  return `请解释${row.name}当前为什么被判断为“${row.state}”，并告诉我这个判断是否可靠。`
+}
+
+function NewsRows({ rows, phase }: { rows: NewsEvent[]; phase: Phase }) {
   if (!rows.length) return <div className="px-4 py-5 text-sm text-gray-500">新闻缓存正在更新，下一次刷新后补充事件映射。</div>
   return (
     <div className="divide-y divide-gray-800">
       {rows.slice(0, 5).map((row, index) => (
-        <div key={`${row.title}-${index}`} className="grid gap-2 px-4 py-3 sm:grid-cols-[42px_1fr_auto] sm:items-start">
+        <div key={`${row.title}-${index}`} className="grid gap-2 px-4 py-3 sm:grid-cols-[42px_1fr_auto_32px] sm:items-start">
           <div className="pt-0.5 text-xs font-semibold text-amber-300">{Math.round(row.hotness || 0)}</div>
           <div>
             <div className="text-sm font-medium leading-5 text-gray-200">{row.title}</div>
@@ -156,18 +188,19 @@ function NewsRows({ rows }: { rows: NewsEvent[] }) {
           <div className={`text-xs ${row.direction === 'positive' ? 'text-red-400' : row.direction === 'negative' ? 'text-emerald-400' : 'text-gray-500'}`}>
             {row.direction === 'positive' ? '偏利多' : row.direction === 'negative' ? '偏利空' : '待验证'}
           </div>
+          <AskAiButton phase={phase} type="news" name={row.title} data={{ ...row }} question={`这条消息对今天A股有什么真实影响？市场是否已经反应？`} />
         </div>
       ))}
     </div>
   )
 }
 
-function RotationTable({ rows }: { rows: SectorRow[] }) {
+function RotationTable({ rows, phase }: { rows: SectorRow[]; phase: Phase }) {
   if (!rows.length) return <div className="px-4 py-5 text-sm text-gray-500">暂无满足当前筛选条件的板块。</div>
   return (
     <div className="divide-y divide-gray-800">
       {rows.slice(0, 10).map(row => (
-        <div key={row.name} className="grid gap-2 px-4 py-3 sm:grid-cols-[1fr_90px_90px_110px_1.5fr] sm:items-center">
+        <div key={row.name} className="grid gap-2 px-4 py-3 sm:grid-cols-[1fr_90px_90px_110px_1.5fr_32px] sm:items-center">
           <div className="flex min-w-0 items-center gap-2">
             <span className={`shrink-0 rounded border px-2 py-0.5 text-xs font-medium ${stateClass(row.tone)}`}>{row.state}</span>
             <div className="min-w-0"><div className="truncate text-sm font-medium text-white">{row.name}</div><div className="truncate text-xs text-gray-600">龙头 {row.leader || '--'}</div></div>
@@ -175,23 +208,25 @@ function RotationTable({ rows }: { rows: SectorRow[] }) {
           <div className={`text-sm font-semibold ${pctClass(row.pct)}`}>{row.pct > 0 ? '+' : ''}{row.pct.toFixed(2)}%</div>
           <div><div className="text-xs text-gray-600">上涨广度</div><div className="text-sm text-gray-300">{Math.round(row.breadth * 100)}%</div></div>
           <div><div className="text-xs text-gray-600">净流入</div><div className={`text-sm ${pctClass(row.net_in)}`}>{money(row.net_in)}</div></div>
-          <div className="text-xs leading-5 text-gray-500">{row.evidence || `综合评分 ${row.score}，排名 ${row.rank}`}</div>
+          <div className="text-xs leading-5 text-gray-500"><span className="text-gray-400">综合评分 {row.score}分</span>{row.evidence ? ` · ${row.evidence.replace('评分', '较上次评分')}` : ` · 排名 ${row.rank}`}</div>
+          <AskAiButton phase={phase} type="sector" name={row.name} data={{ ...row }} question={sectorQuestion(row)} />
         </div>
       ))}
     </div>
   )
 }
 
-function PersonalRows({ rows }: { rows: PersonalRow[] }) {
+function PersonalRows({ rows, phase }: { rows: PersonalRow[]; phase: Phase }) {
   if (!rows.length) return <div className="px-4 py-5 text-sm text-gray-500">当前没有可映射的个人标的。</div>
   return (
     <div className="divide-y divide-gray-800">
       {rows.slice(0, 10).map(row => (
-        <div key={`${row.kind}-${row.symbol}`} className="grid gap-2 px-4 py-3 sm:grid-cols-[1fr_90px_130px_2fr] sm:items-center">
+        <div key={`${row.kind}-${row.symbol}`} className="grid gap-2 px-4 py-3 sm:grid-cols-[1fr_90px_130px_2fr_32px] sm:items-center">
           <div><div className="text-sm font-medium text-white">{row.name}</div><div className="text-xs text-gray-600">{row.symbol} · {row.industry}</div></div>
           <div className={pctClass(row.pct_change)}>{row.pct_change > 0 ? '+' : ''}{row.pct_change.toFixed(2)}%</div>
           <div><span className={`rounded border px-2 py-1 text-xs font-medium ${stateClass(row.tone)}`}>{row.sector_state}</span></div>
           <div className="text-sm leading-5 text-gray-400"><span className="mr-2 font-semibold text-blue-300">{row.action}</span>{row.reason}</div>
+          <AskAiButton phase={phase} type="stock" name={row.name} data={{ ...row }} question={`${row.name}当前受到板块怎样的影响？结合它自身走势给我一个明确结论。`} />
         </div>
       ))}
     </div>
@@ -235,10 +270,10 @@ export default function MarketRadarPanel({ phase, data, loading, onOpenResearch 
           meta={`更新 ${data.updated_at || '--'}${data.comparison_at ? ` · 对比 ${timeLabel(data.comparison_at)}` : ' · 正在建立变化基线'}`}
         />
         <div className="grid gap-px bg-gray-800 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="bg-gray-900 px-4 py-3"><div className="text-xs text-gray-500">市场状态</div><div className="mt-1 text-lg font-semibold text-blue-300">{decision?.action || '待确认'}</div><div className="text-xs text-gray-600">评分 {decision?.score ?? '--'} · 仓位上限 {decision?.position_cap ?? '--'}%</div></div>
-          <div className="bg-gray-900 px-4 py-3"><div className="text-xs text-gray-500">指数平均</div><div className={`mt-1 text-lg font-semibold ${pctClass(data.market?.avg_index_pct || 0)}`}>{(data.market?.avg_index_pct || 0) > 0 ? '+' : ''}{(data.market?.avg_index_pct || 0).toFixed(2)}%</div><div className="text-xs text-gray-600">分化 {data.market?.index_dispersion ?? '--'}个百分点</div></div>
-          <div className="bg-gray-900 px-4 py-3"><div className="text-xs text-gray-500">板块广度</div><div className="mt-1 text-lg font-semibold text-white">{data.market?.sector_up_ratio ?? '--'}%</div><div className="text-xs text-gray-600">行业处于上涨状态</div></div>
-          <div className="bg-gray-900 px-4 py-3"><div className="text-xs text-gray-500">个人映射</div><div className="mt-1 text-lg font-semibold text-white">{data.personal?.risk_count || 0} 风险 / {data.personal?.opportunity_count || 0} 机会</div><div className="text-xs text-gray-600">持仓与自选合并扫描</div></div>
+          <div className="relative bg-gray-900 px-4 py-3"><div className="absolute right-2 top-2"><AskAiButton phase={phase} type="market" name="市场状态" data={{ ...(decision || {}) }} question="当前市场状态为什么是这个结论？最有决策权的证据是什么？" /></div><div className="text-xs text-gray-500">市场状态</div><div className="mt-1 text-lg font-semibold text-blue-300">{decision?.action || '待确认'}</div><div className="text-xs text-gray-600">评分 {decision?.score ?? '--'} · 仓位上限 {decision?.position_cap ?? '--'}%</div></div>
+          <div className="relative bg-gray-900 px-4 py-3"><div className="absolute right-2 top-2"><AskAiButton phase={phase} type="metric" name="指数平均" data={{ avg_index_pct: data.market?.avg_index_pct, index_dispersion: data.market?.index_dispersion }} question="指数平均和指数分化应该如何一起理解？今天真实的市场结构是什么？" /></div><div className="text-xs text-gray-500">指数平均</div><div className={`mt-1 text-lg font-semibold ${pctClass(data.market?.avg_index_pct || 0)}`}>{(data.market?.avg_index_pct || 0) > 0 ? '+' : ''}{(data.market?.avg_index_pct || 0).toFixed(2)}%</div><div className="text-xs text-gray-600">分化 {data.market?.index_dispersion ?? '--'}个百分点</div></div>
+          <div className="relative bg-gray-900 px-4 py-3"><div className="absolute right-2 top-2"><AskAiButton phase={phase} type="metric" name="板块广度" data={{ sector_up_ratio: data.market?.sector_up_ratio }} question="今天的板块广度说明赚钱效应如何？它与指数表现是否一致？" /></div><div className="text-xs text-gray-500">板块广度</div><div className="mt-1 text-lg font-semibold text-white">{data.market?.sector_up_ratio ?? '--'}%</div><div className="text-xs text-gray-600">行业处于上涨状态</div></div>
+          <div className="relative bg-gray-900 px-4 py-3"><div className="absolute right-2 top-2"><AskAiButton phase={phase} type="metric" name="个人映射" data={{ risk_count: data.personal?.risk_count, opportunity_count: data.personal?.opportunity_count, summary: data.personal?.summary }} question="当前市场变化具体会影响我的哪些持仓和自选？给出优先级。" /></div><div className="text-xs text-gray-500">个人映射</div><div className="mt-1 text-lg font-semibold text-white">{data.personal?.risk_count || 0} 风险 / {data.personal?.opportunity_count || 0} 机会</div><div className="text-xs text-gray-600">持仓与自选合并扫描</div></div>
         </div>
         <div className="border-t border-gray-800 px-4 py-3 text-sm leading-6 text-gray-300">{decision?.summary}</div>
         {criticalChange && <div className="border-t border-red-900/50 bg-red-950/20 px-4 py-2.5 text-sm text-red-200"><span className="mr-2 font-semibold">关键变化</span>{criticalChange.title}：{criticalChange.detail}</div>}
@@ -271,7 +306,7 @@ export default function MarketRadarPanel({ phase, data, loading, onOpenResearch 
 
           <section className="overflow-hidden rounded border border-gray-800 bg-gray-900/50">
             <SectionHead icon={Newspaper} title="隔夜事件与A股映射" meta="消息必须经过盘面验证" />
-            <NewsRows rows={briefing.overnight || []} />
+            <NewsRows rows={briefing.overnight || []} phase={phase} />
           </section>
         </>
       )}
@@ -300,7 +335,7 @@ export default function MarketRadarPanel({ phase, data, loading, onOpenResearch 
             ))}
           </div>
         </div>
-        <RotationTable rows={rotationRows} />
+        <RotationTable rows={rotationRows} phase={phase} />
       </section>
 
       <section className="overflow-hidden rounded border border-gray-800 bg-gray-900/50">
@@ -308,11 +343,11 @@ export default function MarketRadarPanel({ phase, data, loading, onOpenResearch 
         <div className="grid gap-px bg-gray-800 lg:grid-cols-2">
           <div className="bg-gray-900">
             <div className="flex items-center gap-2 border-b border-gray-800 px-4 py-2 text-xs font-medium text-red-300"><ArrowUpRight className="h-4 w-4" />净流入靠前</div>
-            <div className="divide-y divide-gray-800">{(data.capital?.inflow || []).slice(0, 5).map(row => <div key={row.name} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm"><span className="text-gray-300">{row.name} · {row.state}</span><span className={pctClass(row.net_in)}>{money(row.net_in)}</span></div>)}</div>
+            <div className="divide-y divide-gray-800">{(data.capital?.inflow || []).slice(0, 5).map(row => <div key={row.name} className="flex items-center gap-3 px-4 py-2.5 text-sm"><span className="min-w-0 flex-1 truncate text-gray-300">{row.name} · {row.state}</span><span className={pctClass(row.net_in)}>{money(row.net_in)}</span><AskAiButton phase={phase} type="sector" name={row.name} data={{ ...row }} question={sectorQuestion(row)} /></div>)}</div>
           </div>
           <div className="bg-gray-900">
             <div className="flex items-center gap-2 border-b border-gray-800 px-4 py-2 text-xs font-medium text-emerald-300"><ArrowDownRight className="h-4 w-4" />净流出靠前</div>
-            <div className="divide-y divide-gray-800">{(data.capital?.outflow || []).slice(0, 5).map(row => <div key={row.name} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm"><span className="text-gray-300">{row.name} · {row.state}</span><span className={pctClass(row.net_in)}>{money(row.net_in)}</span></div>)}</div>
+            <div className="divide-y divide-gray-800">{(data.capital?.outflow || []).slice(0, 5).map(row => <div key={row.name} className="flex items-center gap-3 px-4 py-2.5 text-sm"><span className="min-w-0 flex-1 truncate text-gray-300">{row.name} · {row.state}</span><span className={pctClass(row.net_in)}>{money(row.net_in)}</span><AskAiButton phase={phase} type="sector" name={row.name} data={{ ...row }} question={sectorQuestion(row)} /></div>)}</div>
           </div>
         </div>
       </section>
@@ -320,7 +355,7 @@ export default function MarketRadarPanel({ phase, data, loading, onOpenResearch 
       {phase === 'intraday' && (
         <section className="overflow-hidden rounded border border-gray-800 bg-gray-900/50">
           <SectionHead icon={Newspaper} title="事件与盘面验证" meta="先看影响，再等资金和广度确认" />
-          <NewsRows rows={data.news || []} />
+          <NewsRows rows={data.news || []} phase={phase} />
         </section>
       )}
 
@@ -332,7 +367,7 @@ export default function MarketRadarPanel({ phase, data, loading, onOpenResearch 
             <button onClick={() => setPersonalMode('watchlist')} className={`h-7 rounded px-3 ${personalMode === 'watchlist' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>自选</button>
           </div>
         </div>
-        <PersonalRows rows={personalRows} />
+        <PersonalRows rows={personalRows} phase={phase} />
       </section>
 
       <div className="flex flex-wrap gap-x-4 gap-y-2 border-y border-gray-800 px-1 py-3">

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import BackgroundTasks from './components/BackgroundTasks'
 import ErrorBoundary from './components/ErrorBoundary'
+import FloatingMarketAssistant from './components/FloatingMarketAssistant'
 import OfficePage from './pages/OfficePage'
 import ResearchToolsPage, { type ResearchSection } from './pages/ResearchToolsPage'
 import StrategyCenterPage from './pages/StrategyCenterPage'
@@ -159,6 +160,7 @@ export default function App() {
       )}
       {mainTab === 'strategy' && <ErrorBoundary name="strategy-center"><StrategyCenterPage onSelectStock={handleSelectStock} /></ErrorBoundary>}
       {mainTab === 'watchlist' && <ErrorBoundary name="watchlist-management"><WatchlistPage onSelectStock={handleSelectStock} /></ErrorBoundary>}
+      <FloatingMarketAssistant page={mainTab} phase={marketStatus?.phase || mainTab} />
     </div>
   )
 }

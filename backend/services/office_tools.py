@@ -488,6 +488,7 @@ AGENT_TOOLS: dict[str, list[str]] = {
     "bear":         ["get_stock_snapshot", "get_financials", "search_news", "get_stock_news"],
     "risk":         ["get_my_positions", "get_stock_snapshot", "get_dividend_history"],
     "trader":       list(TOOL_DEFS.keys()),   # 全部工具
+    "copilot":      list(TOOL_DEFS.keys()),   # 页面上下文已自动注入，仍允许按需补查
 }
 
 

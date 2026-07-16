@@ -23,6 +23,7 @@ from api.today_review import router as today_review_router, _do_generate as _do_
 from api.trading_day import router as trading_day_router
 from api.brain import router as brain_router
 from api.office import router as office_router
+from api.copilot import router as copilot_router
 from api.recommend import router as recommend_router
 from api.screen_rule import router as screen_rule_router
 from api.zhengxi import router as zhengxi_router
@@ -57,6 +58,7 @@ app.include_router(today_review_router)
 app.include_router(trading_day_router)
 app.include_router(brain_router)
 app.include_router(office_router)
+app.include_router(copilot_router)
 app.include_router(recommend_router)
 app.include_router(screen_rule_router)
 app.include_router(zhengxi_router)
