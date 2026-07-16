@@ -17,6 +17,14 @@ interface Evaluation {
   }
   sectors?: { name: string; initial_score: number; final_score: number; followed: boolean; summary: string }[]
   lessons?: string[]
+  capture_status?: {
+    enabled?: boolean
+    state?: string
+    snapshot_count?: number
+    first_at?: string
+    last_at?: string
+    next_session?: string
+  }
 }
 
 export default function MarketRadarEvaluation({ tradeDate }: { tradeDate: string }) {
@@ -33,11 +41,19 @@ export default function MarketRadarEvaluation({ tradeDate }: { tradeDate: string
 
   if (!data) return null
   if (!data.ready) {
+    const capture = data.capture_status
     return (
       <section className="rounded border border-gray-800 bg-gray-900/50 px-4 py-3">
         <div className="flex items-start gap-3">
           <Gauge className="mt-0.5 h-4 w-4 shrink-0 text-blue-400" />
-          <div><h2 className="text-sm font-semibold text-white">系统判断复核</h2><p className="mt-1 text-xs leading-5 text-gray-500">{data.verdict} 市场雷达将在交易时段自动积累快照，收盘后检验市场方向和板块延续率。</p></div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-semibold text-white">自动采集状态</h2>
+              <span className="rounded border border-blue-500/30 bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-300">已启用 · 每3分钟</span>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-gray-400">{data.verdict}</p>
+            <p className="mt-1 text-xs leading-5 text-gray-600">{capture?.next_session || '达到两个不同时点后，系统会自动开始检验判断延续性。'}</p>
+          </div>
         </div>
       </section>
     )

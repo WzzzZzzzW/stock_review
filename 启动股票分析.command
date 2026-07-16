@@ -14,6 +14,12 @@ fi
 
 echo "=== 股票分析工具启动中 ==="
 
+if curl -fsS --max-time 2 http://127.0.0.1:8002/health >/dev/null 2>&1; then
+  echo "✅ 后台服务已在运行，正在打开页面"
+  open http://127.0.0.1:8002
+  exit 0
+fi
+
 # 启动后端
 cd backend
 if [ ! -d ".venv" ]; then
@@ -24,29 +30,24 @@ if [ ! -d ".venv" ]; then
 else
   source .venv/bin/activate
 fi
-uvicorn main:app --port 8002 &
+nohup uvicorn main:app --host 127.0.0.1 --port 8002 \
+  > /tmp/stock-review-backend.log 2>&1 < /dev/null &
 BACKEND_PID=$!
-cd ..
-
-# 启动前端
-cd frontend
-if [ ! -d "node_modules" ]; then
-  echo "首次运行，安装前端依赖..."
-  npm install -q
-fi
-npm run dev &
-FRONTEND_PID=$!
+disown "$BACKEND_PID"
 cd ..
 
 # 等待后端就绪后自动打开浏览器
 echo "等待服务启动..."
-sleep 3
-open http://localhost:5173
+for _ in {1..20}; do
+  if curl -fsS --max-time 2 http://127.0.0.1:8002/health >/dev/null 2>&1; then
+    open http://127.0.0.1:8002
+    echo ""
+    echo "✅ 已启动！后台将持续采集，关闭此窗口不影响运行"
+    exit 0
+  fi
+  sleep 1
+done
 
 echo ""
-echo "✅ 已启动！浏览器打开 http://localhost:5173"
-echo "关闭此窗口即停止所有服务"
-echo ""
-
-trap "echo '正在停止服务...'; kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit 0" EXIT INT TERM
-wait
+echo "❌ 启动失败，请查看 /tmp/stock-review-backend.log"
+exit 1

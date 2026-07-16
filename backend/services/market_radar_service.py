@@ -189,6 +189,43 @@ def capture_market_snapshot(force: bool = False, only_open: bool = False) -> dic
     return market_radar_db.save_snapshot(status.get("phase", "unknown"), market, sectors, interval)
 
 
+def _capture_status(trade_date: str | None = None) -> dict:
+    from services.market_clock import get_market_status
+
+    day = trade_date or date.today().isoformat()
+    summary = market_radar_db.snapshot_summary(day)
+    intraday = summary["intraday"]
+    market_status = get_market_status()
+    count = intraday["count"]
+    if count >= 2:
+        state = "ready"
+        message = f"已自动记录{count}个盘中快照，可检验市场方向和板块延续。"
+    elif day == market_status["today"] and market_status["phase"] == "intraday":
+        state = "collecting"
+        message = f"正在自动采集，当前已有{count}个盘中快照；每3分钟新增一次。"
+    elif summary["total"] > 0:
+        first_any = min(
+            (item["first_at"] for item in summary["phases"].values() if item["first_at"]),
+            default="",
+        )
+        first_clock = first_any[11:16] if len(first_any) >= 16 else "收盘后"
+        state = "missed_session"
+        message = f"程序在该交易日从{first_clock}才开始记录，已错过盘中轨迹；收盘数据不能倒推出真实盘中变化。"
+    else:
+        state = "missing"
+        message = "当天没有运行采集服务，历史盘中轨迹无法由收盘数据真实还原。"
+    return {
+        "enabled": True,
+        "interval_seconds": 180,
+        "state": state,
+        "message": message,
+        "snapshot_count": count,
+        "first_at": intraday["first_at"],
+        "last_at": intraday["last_at"],
+        "next_session": "股票分析服务运行时，下个交易日09:30起自动采集，无需打开页面。" if state in {"missed_session", "missing"} else "",
+    }
+
+
 def _rotation_rows(current: list[dict], previous: list[dict]) -> list[dict]:
     previous_map = {row.get("name"): row for row in previous}
     rows = [classify_sector_state(row, previous_map.get(row.get("name"))) for row in current]
@@ -495,6 +532,7 @@ def get_market_radar(phase: str = "intraday", force: bool = False) -> dict:
         "timeline": timeline,
         "news": news,
         "personal": personal,
+        "capture_status": _capture_status(day),
         "data_notes": [
             "板块状态基于涨跌动量、上涨广度、净流入、龙头和时间序列变化综合判断。",
             "净流入不是绝对资金事实，只作为多维证据之一。",
@@ -511,14 +549,16 @@ def evaluate_radar_day(trade_date: str | None = None) -> dict:
     intraday = [row for row in snapshots if row.get("phase") == "intraday"]
     usable = intraday
     if len(usable) < 2:
+        capture_status = _capture_status(day)
         return {
             "trade_date": day,
             "ready": False,
             "snapshot_count": len(usable),
-            "verdict": "当日交易时段快照不足，暂不评价系统判断。",
+            "verdict": capture_status["message"],
             "market": {},
             "sectors": [],
-            "lessons": ["至少需要两个不同时点的市场快照，才能检验盘中判断是否延续。"],
+            "capture_status": capture_status,
+            "lessons": [capture_status["next_session"] or "至少需要两个不同时点的市场快照，才能检验盘中判断是否延续。"],
         }
 
     first, last = usable[0], usable[-1]
@@ -589,5 +629,6 @@ def evaluate_radar_day(trade_date: str | None = None) -> dict:
         "sectors": sector_reviews,
         "sector_hit_rate": hit_rate,
         "event_count": event_count,
+        "capture_status": _capture_status(day),
         "lessons": lessons,
     }

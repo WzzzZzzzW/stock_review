@@ -274,6 +274,13 @@ def _on_startup():
     def delayed():
         import time
         time.sleep(5)
+        try:
+            from services.market_radar_service import capture_market_snapshot
+            captured = capture_market_snapshot(only_open=True)
+            if captured:
+                print(f"[market-radar] 启动采集完成: {captured.get('captured_at', '')}")
+        except Exception as e:
+            print(f"[market-radar] 启动采集失败: {e}")
         _backfill_limitup_on_startup()
         _today_review_catchup_on_startup()
         # 涨停补齐后再补脑库自动导入（错峰，避免同时占满 AI/网络）

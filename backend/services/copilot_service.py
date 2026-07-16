@@ -84,6 +84,7 @@ def build_copilot_context(page_context: dict | None = None) -> dict:
             "visible_data": target.get("data") or {},
         },
         "market": radar.get("market") or {},
+        "capture_status": radar.get("capture_status") or {},
         "sector": sector,
         "sector_recent_snapshots": _sector_history(target_name) if sector else [],
         "related_news": news,

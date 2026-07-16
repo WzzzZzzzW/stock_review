@@ -50,6 +50,31 @@ class MarketRadarStateTests(unittest.TestCase):
         self.assertTrue(result["market"]["consistent"])
         self.assertEqual(result["sector_hit_rate"], 50)
 
+    @patch("services.market_radar_service.market_radar_db.snapshot_summary")
+    @patch("services.market_radar_service.market_radar_db.list_snapshots")
+    def test_evaluation_explains_when_collector_started_after_close(self, snapshots, summary):
+        snapshots.return_value = [
+            {
+                "phase": "postmarket",
+                "captured_at": "2026-07-16T15:22:38",
+                "market": {},
+                "sectors": [],
+            }
+        ]
+        summary.return_value = {
+            "trade_date": "2026-07-16",
+            "total": 1,
+            "intraday": {"count": 0, "first_at": "", "last_at": ""},
+            "phases": {
+                "postmarket": {"count": 1, "first_at": "2026-07-16T15:22:38", "last_at": "2026-07-16T15:22:38"}
+            },
+        }
+        result = evaluate_radar_day("2026-07-16")
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["capture_status"]["state"], "missed_session")
+        self.assertIn("15:22", result["verdict"])
+        self.assertIn("不能倒推出", result["verdict"])
+
 
 if __name__ == "__main__":
     unittest.main()

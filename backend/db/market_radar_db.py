@@ -109,6 +109,31 @@ def list_snapshots(trade_date: str | None = None) -> list[dict]:
     return [_snapshot_row(row) for row in rows]
 
 
+def snapshot_summary(trade_date: str | None = None) -> dict:
+    day = trade_date or date.today().isoformat()
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT phase, COUNT(*) AS count, MIN(captured_at) AS first_at, "
+            "MAX(captured_at) AS last_at FROM market_radar_snapshot "
+            "WHERE trade_date = ? GROUP BY phase",
+            (day,),
+        ).fetchall()
+    phases = {
+        row["phase"]: {
+            "count": int(row["count"] or 0),
+            "first_at": row["first_at"] or "",
+            "last_at": row["last_at"] or "",
+        }
+        for row in rows
+    }
+    return {
+        "trade_date": day,
+        "total": sum(item["count"] for item in phases.values()),
+        "intraday": phases.get("intraday", {"count": 0, "first_at": "", "last_at": ""}),
+        "phases": phases,
+    }
+
+
 def save_snapshot(phase: str, market: dict, sectors: list[dict], min_interval_seconds: int = 150) -> dict:
     day = date.today().isoformat()
     now = datetime.now()
