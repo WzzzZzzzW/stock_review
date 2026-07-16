@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { RefreshCw } from 'lucide-react'
+import MarketRadarEvaluation from '../components/MarketRadarEvaluation'
 import { useWatchlist } from '../stores/watchlistStore'
 
 type DateRow = {
@@ -1256,6 +1257,8 @@ export default function TodayReviewPage() {
             </div>
             <p className="mt-3 text-sm leading-6 text-gray-300">{m?.summary}</p>
           </section>
+
+          <MarketRadarEvaluation tradeDate={data.trade_date} />
 
           <MarketReviewBlock market={m} analysis={a?.market_review} rankTab={rankTab} setRankTab={setRankTab} />
 

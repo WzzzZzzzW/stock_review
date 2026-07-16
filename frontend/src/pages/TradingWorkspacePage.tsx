@@ -14,6 +14,7 @@ import {
   Target,
 } from 'lucide-react'
 import PortfolioPage from './PortfolioPage'
+import MarketRadarPanel, { type MarketRadarData } from '../components/MarketRadarPanel'
 import { useWatchlist } from '../stores/watchlistStore'
 
 type Phase = 'premarket' | 'intraday'
@@ -145,11 +146,6 @@ interface DailyReport {
   decision?: MultiDecision & { position_cap?: number }
 }
 
-interface IndustryData {
-  industries?: { name: string; pct: string; pct_num: number; leader: string; net_in?: string; decision?: MultiDecision }[]
-  updated_at?: string
-}
-
 const emptyPortfolio: PortfolioData = {
   positions: [],
   summary: { total_value: 0, total_pnl_amount: 0, total_pnl_pct: 0, today_pnl: 0, position_count: 0 },
@@ -236,7 +232,7 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
   const [recommendation, setRecommendation] = useState<RecommendationData | null>(null)
   const [quotes, setQuotes] = useState<Quote[]>([])
   const [daily, setDaily] = useState<DailyReport | null>(null)
-  const [industry, setIndustry] = useState<IndustryData | null>(null)
+  const [radar, setRadar] = useState<MarketRadarData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [portfolioOpen, setPortfolioOpen] = useState(false)
@@ -254,7 +250,7 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
         fetch('/api/portfolio/sell-guidance'),
         fetch(phase === 'premarket' ? '/api/recommend/tomorrow' : '/api/recommend/today'),
         fetch('/api/daily-report'),
-        fetch('/api/industry/summary'),
+        fetch(`/api/market-radar?phase=${phase}`),
       ]
       if (quoteUrl) requests.push(fetch(quoteUrl))
       const responses = await Promise.all(requests)
@@ -264,7 +260,7 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
       setGuidance((payloads[2]?.guidance ?? {}) as Record<string, GuidanceEntry>)
       setRecommendation(payloads[3] as RecommendationData)
       setDaily(payloads[4] as DailyReport)
-      setIndustry(payloads[5] as IndustryData)
+      setRadar(payloads[5] as MarketRadarData)
       let cursor = 6
       if (quoteUrl) {
         setQuotes((payloads[cursor]?.stocks ?? []) as Quote[])
@@ -375,6 +371,8 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
           </div>
         )}
       </section>
+
+      <MarketRadarPanel phase={phase} data={radar} loading={loading} onOpenResearch={onOpenResearch} />
 
       <div className="space-y-4">
         <section className="overflow-hidden rounded border border-gray-800 bg-gray-900/50">
@@ -490,40 +488,6 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
           )}
         </section>
 
-        <section className="overflow-hidden rounded border border-gray-800 bg-gray-900/50">
-          <SectionTitle icon={Activity} title={isPremarket ? '开盘证据' : '市场脉搏'} summary="这里只给结论，完整数据下沉到研究工具" />
-          <div className="grid gap-px bg-gray-800 sm:grid-cols-2 lg:grid-cols-4">
-            {(daily?.indices ?? []).slice(0, 4).map(index => (
-              <div key={index.key} className="bg-gray-900 px-4 py-3">
-                <div className="text-xs text-gray-500">{index.name}</div>
-                <div className="mt-1 flex items-baseline justify-between gap-2">
-                  <span className="text-sm font-semibold text-white">{index.price || '--'}</span>
-                  <span className={`text-sm ${pctClass(index.pct)}`}>{percent(index.pct)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="grid gap-3 px-4 py-3 lg:grid-cols-2">
-            <div>
-              <div className="mb-2 text-xs font-medium text-red-300">强势方向</div>
-              <p className="text-sm leading-6 text-gray-300">
-                {(industry?.industries ?? []).filter(item => ['主线候选', '轮动观察'].includes(item.decision?.action || '')).slice(0, 4).map(item => `${item.name} ${item.decision?.score ?? '--'}分·${item.decision?.action}`).join(' · ') || '暂无通过广度、资金和龙头共同验证的强势板块'}
-              </p>
-            </div>
-            <div>
-              <div className="mb-2 text-xs font-medium text-emerald-300">回避方向</div>
-              <p className="text-sm leading-6 text-gray-300">
-                {(industry?.industries ?? []).filter(item => item.decision?.action === '弱势回避').sort((a, b) => Number(a.decision?.score ?? 50) - Number(b.decision?.score ?? 50)).slice(0, 4).map(item => `${item.name} ${item.decision?.score ?? '--'}分·弱势回避`).join(' · ') || '暂无多维证据一致的弱势板块'}
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-gray-800 px-4 py-2.5">
-            <button onClick={() => onOpenResearch?.('market')} className="text-xs text-blue-300 hover:text-blue-200">查看大盘证据</button>
-            <button onClick={() => onOpenResearch?.('industry')} className="text-xs text-blue-300 hover:text-blue-200">查看行业证据</button>
-            <button onClick={() => onOpenResearch?.('news')} className="text-xs text-blue-300 hover:text-blue-200">查看新闻证据</button>
-            <button onClick={() => onOpenResearch?.('lhb')} className="text-xs text-blue-300 hover:text-blue-200">查看龙虎榜</button>
-          </div>
-        </section>
       </div>
 
       <footer className="mt-4 flex items-start gap-2 text-xs leading-5 text-gray-600">

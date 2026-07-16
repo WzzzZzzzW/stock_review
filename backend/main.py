@@ -18,6 +18,7 @@ from api.prediction    import router as prediction_router
 from api.portfolio import router as portfolio_router
 from api.limitup_review import router as limitup_router, _do_generate
 from api.market_review import router as market_review_router
+from api.market_radar import router as market_radar_router
 from api.today_review import router as today_review_router, _do_generate as _do_generate_today_review
 from api.trading_day import router as trading_day_router
 from api.brain import router as brain_router
@@ -51,6 +52,7 @@ app.include_router(prediction_router)
 app.include_router(portfolio_router)
 app.include_router(limitup_router)
 app.include_router(market_review_router)
+app.include_router(market_radar_router)
 app.include_router(today_review_router)
 app.include_router(trading_day_router)
 app.include_router(brain_router)
@@ -118,6 +120,26 @@ try:
         )
     except Exception as e:
         print(f"[recommend] 盘中刷新定时任务注册失败: {e}")
+
+    # 市场雷达：盘中每 3 分钟保存一次快照，用于识别板块启动、加速、分歧和退潮。
+    try:
+        from services.market_radar_service import capture_market_snapshot
+        scheduler.add_job(
+            lambda: capture_market_snapshot(only_open=True),
+            CronTrigger(day_of_week="mon-fri", hour="9-14", minute="*/3",
+                        timezone="Asia/Shanghai"),
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            lambda: capture_market_snapshot(force=True),
+            CronTrigger(day_of_week="mon-fri", hour=9, minute="20,25,27",
+                        timezone="Asia/Shanghai"),
+            max_instances=1,
+            coalesce=True,
+        )
+    except Exception as e:
+        print(f"[market-radar] 快照任务注册失败: {e}")
 
     scheduler.start()
 except ImportError:
