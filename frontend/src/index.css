@@ -6,6 +6,80 @@ body {
   @apply bg-gray-950 text-gray-100 font-sans;
 }
 
+@keyframes codex-pet-float {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50% { transform: translateY(-6px) rotate(1deg); }
+}
+
+@keyframes codex-pet-listen {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-3px) scale(1.025); }
+}
+
+@keyframes codex-pet-think {
+  0%, 100% { transform: translateY(0) rotate(-3deg); }
+  50% { transform: translateY(-5px) rotate(3deg); }
+}
+
+@keyframes codex-pet-shadow-pulse {
+  0%, 100% { opacity: 0.55; transform: scaleX(1); }
+  50% { opacity: 0.28; transform: scaleX(0.78); }
+}
+
+@keyframes codex-pet-dot {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+
+.codex-pet-image {
+  image-rendering: pixelated;
+  pointer-events: none;
+  transform-origin: 50% 86%;
+  filter: drop-shadow(0 7px 9px rgb(0 0 0 / 0.42));
+  will-change: transform;
+}
+
+.codex-pet-image.is-idle {
+  animation: codex-pet-float 2.8s ease-in-out infinite;
+}
+
+.codex-pet-image.is-listening {
+  animation: codex-pet-listen 1.8s ease-in-out infinite;
+}
+
+.codex-pet-image.is-thinking {
+  animation: codex-pet-think 0.72s ease-in-out infinite;
+}
+
+.codex-pet-shadow {
+  animation: codex-pet-shadow-pulse 2.8s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.codex-pet-bubble i {
+  height: 4px;
+  width: 4px;
+  border-radius: 9999px;
+  background: rgb(96 165 250);
+  animation: codex-pet-dot 1s ease-in-out infinite;
+}
+
+.codex-pet-bubble i:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.codex-pet-bubble i:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .codex-pet-image,
+  .codex-pet-shadow,
+  .codex-pet-bubble i {
+    animation: none !important;
+  }
+}
+
 /* ── Markdown 报告样式 ──────────────────────────────── */
 .report-content h1 {
   @apply text-xl font-bold text-white mt-8 mb-3 pb-2 border-b border-gray-700;

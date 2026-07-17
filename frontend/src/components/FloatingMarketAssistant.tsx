@@ -2,13 +2,22 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  Bot,
+  Activity,
+  Check,
+  ChevronDown,
+  Compass,
   GripHorizontal,
+  Landmark,
+  LineChart,
   LoaderCircle,
   MessageCircleQuestion,
+  Newspaper,
   Plus,
   SendHorizontal,
+  ShieldCheck,
+  Sparkles,
   X,
+  type LucideIcon,
 } from 'lucide-react'
 import {
   aiAssistantStore,
@@ -41,9 +50,36 @@ interface DragState {
   moved: boolean
 }
 
+type CopilotRoleId = 'market' | 'fundamentals' | 'news' | 'technical' | 'sentiment' | 'risk' | 'zhengxi'
+
+interface CopilotRole {
+  id: CopilotRoleId
+  title: string
+  desc: string
+  icon: LucideIcon
+  accent: string
+  iconBg: string
+}
+
+const COPILOT_ROLES: CopilotRole[] = [
+  { id: 'market', title: '综合决策', desc: '多维证据，给唯一结论', icon: Compass, accent: 'text-blue-300', iconBg: 'bg-blue-500/15' },
+  { id: 'fundamentals', title: '财务基本面', desc: '财报质量、估值与护城河', icon: Landmark, accent: 'text-cyan-300', iconBg: 'bg-cyan-500/15' },
+  { id: 'news', title: '消息面', desc: '政策事件、新闻映射与预期差', icon: Newspaper, accent: 'text-amber-300', iconBg: 'bg-amber-500/15' },
+  { id: 'technical', title: '技术量价', desc: '趋势、量价与支撑压力', icon: LineChart, accent: 'text-violet-300', iconBg: 'bg-violet-500/15' },
+  { id: 'sentiment', title: '市场情绪', desc: '广度、赚钱效应与资金偏好', icon: Activity, accent: 'text-rose-300', iconBg: 'bg-rose-500/15' },
+  { id: 'risk', title: '风险控制', desc: '仓位、回撤与退出条件', icon: ShieldCheck, accent: 'text-orange-300', iconBg: 'bg-orange-500/15' },
+  { id: 'zhengxi', title: '郑希风格', desc: '景气成长、ROE跃迁与客观修正', icon: Sparkles, accent: 'text-emerald-300', iconBg: 'bg-emerald-500/15' },
+]
+
 const CHAT_KEY = 'market_copilot_chat_id'
 const AVATAR_POS_KEY = 'market_copilot_avatar_position'
 const PANEL_POS_KEY = 'market_copilot_panel_position'
+const ROLE_KEY = 'market_copilot_role'
+
+function loadRole(): CopilotRoleId {
+  const saved = localStorage.getItem(ROLE_KEY) as CopilotRoleId | null
+  return COPILOT_ROLES.some(role => role.id === saved) ? saved! : 'market'
+}
 
 function loadPoint(key: string, fallback: Point): Point {
   try {
@@ -51,6 +87,22 @@ function loadPoint(key: string, fallback: Point): Point {
     if (Number.isFinite(parsed?.x) && Number.isFinite(parsed?.y)) return parsed
   } catch { /* ignore */ }
   return fallback
+}
+
+function clampAvatarToViewport(point: Point): Point {
+  return {
+    x: Math.max(8, Math.min(point.x, window.innerWidth - 92)),
+    y: Math.max(62, Math.min(point.y, window.innerHeight - 96)),
+  }
+}
+
+function clampPanelToViewport(point: Point): Point {
+  const width = Math.min(460, window.innerWidth - 16)
+  const height = Math.min(660, window.innerHeight - 78)
+  return {
+    x: Math.max(8, Math.min(point.x, window.innerWidth - width - 8)),
+    y: Math.max(62, Math.min(point.y, window.innerHeight - height - 8)),
+  }
 }
 
 function pageLabel(page: string) {
@@ -73,8 +125,15 @@ function contextTitle(context: AssistantContext) {
     : pageLabel(context.page)
 }
 
-function quickQuestions(context: AssistantContext): string[] {
+function quickQuestions(context: AssistantContext, roleId: CopilotRoleId): string[] {
   const target = context.target?.name
+  const subject = target || '当前市场'
+  if (roleId === 'fundamentals') return [`${subject}的财务质量和估值处于什么水平？`, `${subject}最需要核验的基本面风险是什么？`]
+  if (roleId === 'news') return [`${subject}今天受哪些消息驱动？`, `${subject}的消息是新催化还是已经被市场消化？`]
+  if (roleId === 'technical') return [`${subject}当前量价结构是否支持继续走强？`, `${subject}的支撑、压力和失效条件是什么？`]
+  if (roleId === 'sentiment') return [`${subject}的赚钱效应是真扩散还是局部抱团？`, `${subject}当前处于启动、高潮还是退潮？`]
+  if (roleId === 'risk') return [`${subject}现在最大的风险敞口是什么？`, `${subject}触发什么条件必须降仓或退出？`]
+  if (roleId === 'zhengxi') return [`按郑希的景气成长框架怎么看${subject}？`, `${subject}的景气、ROE和底层逻辑是否在改善？`]
   if (context.target?.type === 'sector' && target) {
     return [
       `${target}现在是真强还是假强？`,
@@ -95,31 +154,33 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
   const assistant = useAiAssistant()
   const baseContext = useMemo<AssistantContext>(() => ({ page, phase }), [page, phase])
   const [activeContext, setActiveContext] = useState<AssistantContext>(baseContext)
-  const [avatarPos, setAvatarPos] = useState<Point>(() => loadPoint(AVATAR_POS_KEY, {
-    x: Math.max(12, window.innerWidth - 82),
-    y: Math.max(76, window.innerHeight - 96),
-  }))
-  const [panelPos, setPanelPos] = useState<Point>(() => loadPoint(PANEL_POS_KEY, {
+  const [avatarPos, setAvatarPos] = useState<Point>(() => clampAvatarToViewport(loadPoint(AVATAR_POS_KEY, {
+    x: Math.max(12, window.innerWidth - 100),
+    y: Math.max(76, window.innerHeight - 112),
+  })))
+  const [panelPos, setPanelPos] = useState<Point>(() => clampPanelToViewport(loadPoint(PANEL_POS_KEY, {
     x: Math.max(8, window.innerWidth - 554),
     y: 74,
-  }))
+  })))
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [chatId, setChatId] = useState('')
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState('')
   const [error, setError] = useState('')
+  const [roleId, setRoleId] = useState<CopilotRoleId>(loadRole)
+  const [roleMenuOpen, setRoleMenuOpen] = useState(false)
   const dragRef = useRef<DragState | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const roleMenuRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const activeRole = COPILOT_ROLES.find(role => role.id === roleId) || COPILOT_ROLES[0]
+  const ActiveRoleIcon = activeRole.icon
 
   const clampPoint = (kind: DragState['kind'], point: Point): Point => {
     if (kind === 'avatar') {
-      return {
-        x: Math.max(8, Math.min(point.x, window.innerWidth - 70)),
-        y: Math.max(62, Math.min(point.y, window.innerHeight - 74)),
-      }
+      return clampAvatarToViewport(point)
     }
     const rect = panelRef.current?.getBoundingClientRect()
     const width = rect?.width || Math.min(460, window.innerWidth - 16)
@@ -151,6 +212,14 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
   }, [])
 
   useEffect(() => {
+    const closeRoleMenu = (event: PointerEvent) => {
+      if (!roleMenuRef.current?.contains(event.target as Node)) setRoleMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeRoleMenu)
+    return () => document.removeEventListener('pointerdown', closeRoleMenu)
+  }, [])
+
+  useEffect(() => {
     if (!assistant.request) return
     setActiveContext(assistant.request.context)
     setInput(assistant.request.suggestedQuestion || '')
@@ -170,8 +239,8 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
     if (!assistant.isOpen || window.innerWidth < 640) return
     const rect = panelRef.current?.getBoundingClientRect()
     if (!rect) return
-    const avatarRight = avatarPos.x + 62
-    const avatarBottom = avatarPos.y + 66
+    const avatarRight = avatarPos.x + 84
+    const avatarBottom = avatarPos.y + 90
     const overlaps = avatarPos.x < rect.right && avatarRight > rect.left
       && avatarPos.y < rect.bottom && avatarBottom > rect.top
     if (!overlaps) return
@@ -241,13 +310,21 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
     window.setTimeout(() => inputRef.current?.focus(), 50)
   }
 
+  const selectRole = (nextRole: CopilotRoleId) => {
+    setRoleId(nextRole)
+    setRoleMenuOpen(false)
+    localStorage.setItem(ROLE_KEY, nextRole)
+    setError('')
+    window.setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
   const submit = async (question?: string) => {
     const message = (question ?? input).trim()
     if (!message || loading) return
     setInput('')
     setError('')
     setLoading(true)
-    setProgress('正在读取当前页面和实时市场证据...')
+    setProgress(`${activeRole.title}正在读取当前页面和实时证据...`)
     setMessages(current => [...current, {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -258,7 +335,7 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
       const response = await fetch('/api/copilot/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, chat_id: chatId, context: activeContext }),
+        body: JSON.stringify({ message, chat_id: chatId, context: activeContext, role: roleId }),
       })
       if (!response.ok || !response.body) {
         const detail = await response.text()
@@ -306,29 +383,37 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
     }
   }
 
-  const questions = quickQuestions(activeContext)
+  const questions = quickQuestions(activeContext, roleId)
 
   return (
     <>
       <button
         type="button"
-        aria-label="打开市场分析师"
-        title="市场分析师"
+        aria-label={`打开${activeRole.title}`}
+        title={`Codex 投资助手 · ${activeRole.title}`}
         onPointerDown={event => beginDrag('avatar', event)}
         onPointerMove={moveDrag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        className={`fixed z-[80] h-[66px] w-[62px] touch-none select-none focus:outline-none ${assistant.isOpen ? 'hidden sm:block' : ''}`}
+        className={`group fixed z-[80] h-[90px] w-[84px] touch-none select-none focus:outline-none ${assistant.isOpen ? 'hidden sm:block' : ''}`}
         style={{ left: avatarPos.x, top: avatarPos.y }}
       >
-        <span className="relative flex h-full w-full flex-col items-center justify-center drop-shadow-[0_8px_16px_rgba(0,0,0,0.45)]">
-          <span className={`relative z-10 flex h-11 w-12 items-center justify-center rounded-[14px] border-2 ${assistant.isOpen ? 'border-blue-300 bg-blue-500 text-white' : 'border-blue-400 bg-gray-900 text-blue-300'}`}>
-            <Bot className="h-7 w-7" strokeWidth={2.1} />
-            <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-gray-950 bg-emerald-400" />
+        <span className="codex-pet-stage relative flex h-full w-full items-end justify-center">
+          <span className="codex-pet-shadow absolute bottom-1 h-3 w-12 rounded-full bg-black/50 blur-[2px]" />
+          <img
+            src="/assets/codex-pet.png"
+            alt=""
+            draggable={false}
+            className={`codex-pet-image relative z-10 h-[82px] w-[82px] object-contain ${loading ? 'is-thinking' : assistant.isOpen ? 'is-listening' : 'is-idle'}`}
+          />
+          <span className={`absolute left-0 top-1 z-20 flex h-7 w-7 items-center justify-center rounded-full border border-gray-700 bg-gray-950 shadow-lg ${activeRole.accent}`}>
+            <ActiveRoleIcon className="h-4 w-4" />
           </span>
-          <span className="-mt-1 h-4 w-8 rounded-b-xl border-x-2 border-b-2 border-blue-400 bg-gray-800" />
-          <span className="absolute bottom-0 left-3.5 h-2 w-3 rounded-b bg-blue-400" />
-          <span className="absolute bottom-0 right-3.5 h-2 w-3 rounded-b bg-blue-400" />
+          {loading && (
+            <span className="codex-pet-bubble absolute -right-1 top-0 z-20 flex h-7 min-w-9 items-center justify-center gap-1 rounded-full border border-blue-700 bg-gray-950 px-2 shadow-lg">
+              <i /><i /><i />
+            </span>
+          )}
         </span>
       </button>
 
@@ -336,7 +421,7 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
         <div
           ref={panelRef}
           role="dialog"
-          aria-label="市场分析师对话"
+          aria-label="Codex 投资助手对话"
           className="fixed z-[79] flex h-[min(660px,calc(100vh-78px))] w-[min(460px,calc(100vw-16px))] flex-col overflow-hidden rounded-md border border-blue-900/80 bg-gray-950 shadow-2xl shadow-black/60"
           style={{ left: panelPos.x, top: panelPos.y }}
         >
@@ -347,9 +432,11 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-blue-600/20 text-blue-300"><Bot className="h-5 w-5" /></span>
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden">
+              <img src="/assets/codex-pet.png" alt="" className="codex-pet-image is-listening h-10 w-10 object-contain" />
+            </span>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2"><h2 className="text-sm font-semibold text-white">市场分析师</h2><GripHorizontal className="h-4 w-4 text-gray-700" /></div>
+              <div className="flex items-center gap-2"><h2 className="text-sm font-semibold text-white">Codex 投资助手</h2><GripHorizontal className="h-4 w-4 text-gray-700" /></div>
               <p className="truncate text-xs text-gray-500">{contextTitle(activeContext)}</p>
             </div>
             <button
@@ -368,12 +455,57 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
             ><X className="h-4 w-4" /></button>
           </header>
 
+          <div ref={roleMenuRef} className="relative z-30 border-b border-gray-800 bg-gray-950 px-3 py-2">
+            <button
+              type="button"
+              aria-expanded={roleMenuOpen}
+              aria-label="选择分析角色"
+              onClick={() => setRoleMenuOpen(open => !open)}
+              className="flex w-full items-center gap-2.5 rounded border border-gray-800 bg-gray-900 px-2.5 py-2 text-left hover:border-gray-700 hover:bg-gray-800"
+            >
+              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded ${activeRole.iconBg} ${activeRole.accent}`}>
+                <ActiveRoleIcon className="h-4 w-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-gray-100">{activeRole.title}</span>
+                <span className="block truncate text-xs text-gray-500">{activeRole.desc}</span>
+              </span>
+              <ChevronDown className={`h-4 w-4 text-gray-500 transition-transform ${roleMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {roleMenuOpen && (
+              <div className="absolute left-3 right-3 top-[calc(100%-2px)] z-40 max-h-[360px] overflow-y-auto rounded border border-gray-700 bg-gray-900 py-1 shadow-2xl shadow-black/70">
+                {COPILOT_ROLES.map(role => {
+                  const RoleIcon = role.icon
+                  const selected = role.id === roleId
+                  return (
+                    <button
+                      key={role.id}
+                      type="button"
+                      onClick={() => selectRole(role.id)}
+                      className={`flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-800 ${selected ? 'bg-blue-950/40' : ''}`}
+                    >
+                      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded ${role.iconBg} ${role.accent}`}>
+                        <RoleIcon className="h-4 w-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className={`block text-sm font-medium ${selected ? 'text-blue-200' : 'text-gray-200'}`}>{role.title}</span>
+                        <span className="block text-xs text-gray-500">{role.desc}</span>
+                      </span>
+                      {selected && <Check className="h-4 w-4 shrink-0 text-blue-400" />}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
           <div className="flex-1 overflow-y-auto px-3 py-4">
             {messages.length === 0 && (
               <div className="space-y-4">
                 <div className="flex items-start gap-3 text-sm leading-6 text-gray-300">
                   <MessageCircleQuestion className="mt-0.5 h-5 w-5 shrink-0 text-blue-400" />
-                  <p>{activeContext.target?.name ? `已锁定${activeContext.target.name}及其市场证据。` : '已连接当前页面的实时市场证据。'}</p>
+                  <p><strong className="font-semibold text-white">{activeRole.title}</strong>已接管本轮分析，{activeContext.target?.name ? `并锁定${activeContext.target.name}及其市场证据。` : '已连接当前页面的实时市场证据。'}</p>
                 </div>
                 <div className="space-y-2">
                   {questions.map(question => (
@@ -392,7 +524,9 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
                 </div>
               ) : (
                 <div key={message.id} className="flex items-start gap-2.5">
-                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-blue-950 text-blue-300"><Bot className="h-4 w-4" /></span>
+                  <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden">
+                    <img src="/assets/codex-pet.png" alt="" className="codex-pet-image h-8 w-8 object-contain" />
+                  </span>
                   <div className="min-w-0 flex-1 text-sm leading-6 text-gray-300 [&_h1]:mb-2 [&_h1]:font-semibold [&_h1]:text-white [&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:font-semibold [&_h2]:text-blue-200 [&_li]:ml-4 [&_li]:list-disc [&_p]:mb-2 [&_strong]:text-white">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
                   </div>

@@ -263,6 +263,18 @@ def _retrieve_refs(question: str, k: int = 4) -> str:
     return "\n".join(lines)
 
 
+def build_copilot_guidance(question: str) -> str:
+    """Expose a compact, source-grounded Zhengxi-style guide to the floating assistant."""
+    method = get_method()[:2200]
+    refs = _retrieve_refs(question, k=4)
+    blocks = [
+        "## 郑希公开方法论摘录（仅作为分析框架，不冒充本人）\n" + method,
+    ]
+    if refs:
+        blocks.append("## 与本问题相关的公开语料\n" + refs)
+    return "\n\n".join(blocks)
+
+
 # ── 个股识别 + 数据快照（聊到某只票时自动带数据）─────────────────────────────
 
 _name_map_cache: dict = {"date": "", "map": {}}   # {股票名: 6位代码}
