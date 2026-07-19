@@ -10,6 +10,8 @@ import pandas as pd
 import datetime
 import threading
 
+from utils.fallback_log import report_data_fallback
+
 # baostock 全局互斥锁（socket 不支持并发）
 _BS_LOCK = threading.Lock()
 
@@ -389,8 +391,10 @@ def fetch_main_business(symbol: str) -> dict:
                 "products": str(row.get("产品类型", "") or "").strip(),
                 "scope":    str(row.get("经营范围", "") or "").strip(),
             }
-    except Exception:
-        pass
+    except Exception as exc:
+        report_data_fallback(
+            "akshare", "main_business", exc, context={"symbol": symbol}
+        )
     _business_cache[symbol] = {"date": today, "data": data}
     return data
 
@@ -487,8 +491,18 @@ def _fetch_quarters(bs_code: str) -> dict:
                     if key and key not in seen:
                         seen.add(key)
                         rows.append(row)
-            except Exception:
-                pass
+            except Exception as exc:
+                report_data_fallback(
+                    "baostock",
+                    "quarter_financials",
+                    exc,
+                    context={
+                        "symbol": bs_code,
+                        "year": y,
+                        "quarter": q,
+                        "query": getattr(fn, "__name__", type(fn).__name__),
+                    },
+                )
             y, q = _prev_quarter(y, q)
         rows.sort(key=lambda r: r.get("statDate", ""), reverse=True)
         return rows
@@ -540,7 +554,13 @@ def get_lhb(symbol: str, start: str, end: str) -> list[dict]:
                 "after_5d":    row.get("上榜后5日", "--"),
             })
         return records
-    except Exception:
+    except Exception as exc:
+        report_data_fallback(
+            "akshare",
+            "lhb_detail",
+            exc,
+            context={"symbol": symbol, "start": start, "end": end},
+        )
         return []
 
 
@@ -573,7 +593,10 @@ def get_ths_hot_context(key_dates: list[str]) -> dict[str, list[str]]:
             # 按出现频次排序，取top10
             top = sorted(themes.items(), key=lambda x: -x[1])[:10]
             result[date] = [t for t, _ in top]
-        except Exception:
+        except Exception as exc:
+            report_data_fallback(
+                "10jqka", "hot_context", exc, context={"date": date}
+            )
             continue
     return result
 
@@ -635,7 +658,10 @@ def get_industry_rank(industry_name: str) -> dict:
                 "total":     total,
             }
         return result
-    except Exception:
+    except Exception as exc:
+        report_data_fallback(
+            "akshare", "industry_rank", exc, context={"industry": industry_name}
+        )
         return {}
 
 
@@ -690,7 +716,13 @@ def get_fund_flow(symbol: str) -> dict:
                 "net":      str(row.get("净额", "--")),
                 "turnover": str(row.get("换手率", "--")),
             }
-        except Exception:
+        except Exception as exc:
+            report_data_fallback(
+                "akshare",
+                "fund_flow",
+                exc,
+                context={"symbol": symbol, "period": period},
+            )
             continue
     return result
 
@@ -735,7 +767,10 @@ def get_stock_fund_flow_day(symbol: str) -> dict:
             "mid_net":      _num(row.get("中单净流入-净额")),
             "small_net":    _num(row.get("小单净流入-净额")),
         }
-    except Exception:
+    except Exception as exc:
+        report_data_fallback(
+            "akshare", "stock_fund_flow_day", exc, context={"symbol": symbol}
+        )
         return {}
 
 
@@ -755,7 +790,10 @@ def get_news(symbol: str, limit: int = 10) -> list[dict]:
                 "source": row.get("新闻来源", ""),
             })
         return records
-    except Exception:
+    except Exception as exc:
+        report_data_fallback(
+            "akshare", "stock_news", exc, context={"symbol": symbol}
+        )
         return []
 
 
@@ -773,7 +811,10 @@ def get_announcements(symbol: str) -> list[dict]:
                 "type":  row.get("公告类型", ""),
             })
         return records
-    except Exception:
+    except Exception as exc:
+        report_data_fallback(
+            "akshare", "stock_announcements", exc, context={"symbol": symbol}
+        )
         return []
 
 
@@ -810,7 +851,13 @@ def collect_all(symbol: str, start: str, end: str) -> dict:
     def _safe(fn, *args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except Exception:
+        except Exception as exc:
+            report_data_fallback(
+                "stock_data",
+                getattr(fn, "__name__", type(fn).__name__),
+                exc,
+                context={"symbol": symbol},
+            )
             return None
 
     # 串行采集辅助数据（避免 py-mini-racer 线程安全问题）
@@ -839,7 +886,10 @@ def collect_all(symbol: str, start: str, end: str) -> dict:
                     for _, r in sub.iterrows()
                     if pd.notna(r.get("close"))
                 ]
-    except Exception:
+    except Exception as exc:
+        report_data_fallback(
+            "stock_data", "index_relative_strength", exc, context={"symbol": symbol}
+        )
         index_series = []
 
     return {
@@ -959,7 +1009,13 @@ def collect_yesterday(symbol: str) -> dict:
     def _safe(fn, *args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except Exception:
+        except Exception as exc:
+            report_data_fallback(
+                "stock_data",
+                getattr(fn, "__name__", type(fn).__name__),
+                exc,
+                context={"symbol": symbol, "review": "yesterday"},
+            )
             return None
 
     lhb       = _safe(get_lhb, symbol, the_date_compact, the_date_compact) or []
@@ -1202,8 +1258,14 @@ def fetch_quick_batch(symbols: list[str]) -> list[dict]:
                     bs_code = _bs_symbol(sym)
                     try:
                         result = _quick_review_one(bs_code, sym)
-                    except Exception as e:
-                        result = {"symbol": sym, "error": str(e)}
+                    except Exception as exc:
+                        report_data_fallback(
+                            "baostock",
+                            "quick_review",
+                            exc,
+                            context={"symbol": sym},
+                        )
+                        result = {"symbol": sym, "error": str(exc)}
                     cached[sym] = result
             finally:
                 try: bs.logout()
@@ -1216,6 +1278,12 @@ def fetch_quick_batch(symbols: list[str]) -> list[dict]:
                 for old_key in list(_quick_batch_cache)[:-32]:
                     _quick_batch_cache.pop(old_key, None)
         except (BaostockBusy, BaostockTimeout, BaostockCooldown) as e:
+            report_data_fallback(
+                "baostock",
+                "quick_review_batch",
+                e,
+                context={"symbols": len(missing)},
+            )
             # 未完成的留空（每只标 error），命中缓存的仍可返回
             for s in missing:
                 cached.setdefault(s, {"symbol": s, "error": str(e)})
@@ -1291,7 +1359,13 @@ def _baostock_history_batch(symbols: list[str], start_fmt: str, end_fmt: str,
             for j, sym in enumerate(symbols):
                 try:
                     fetched[sym] = _baostock_history_one(_bs_symbol(sym), start_fmt, end_fmt)
-                except Exception:
+                except Exception as exc:
+                    report_data_fallback(
+                        "baostock",
+                        "backtest_history",
+                        exc,
+                        context={"symbol": sym},
+                    )
                     fetched[sym] = pd.DataFrame()
                 if progress_cb and ((j + 1) % 10 == 0 or j + 1 == len(symbols)):
                     try: progress_cb(j + 1, len(symbols))
@@ -1304,7 +1378,13 @@ def _baostock_history_batch(symbols: list[str], start_fmt: str, end_fmt: str,
     timeout = min(600.0, 40.0 + 0.6 * len(symbols))
     try:
         _bs_run(_work, timeout=timeout, label=f"回测历史 baostock({len(symbols)})")
-    except (BaostockBusy, BaostockTimeout, BaostockCooldown):
+    except (BaostockBusy, BaostockTimeout, BaostockCooldown) as exc:
+        report_data_fallback(
+            "baostock",
+            "backtest_history_batch",
+            exc,
+            context={"symbols": len(symbols)},
+        )
         pass   # 拿到多少算多少，部分数据也能跑回测
     return fetched
 
@@ -1362,7 +1442,13 @@ def fetch_history_batch(symbols: list[str], days_back: int = 200,
             if "amplitude_raw" in df.columns:
                 df["amplitude"] = pd.to_numeric(df["amplitude_raw"], errors="coerce")
             return sym, df
-        except Exception:
+        except Exception as exc:
+            report_data_fallback(
+                "akshare",
+                "backtest_history",
+                exc,
+                context={"symbol": sym},
+            )
             return sym, pd.DataFrame()
 
     done = 0
@@ -1392,7 +1478,13 @@ def fetch_history_batch(symbols: list[str], days_back: int = 200,
             for sym, df in bs_fetched.items():
                 if df is not None and not df.empty:
                     cached[sym] = df
-        except Exception:
+        except Exception as exc:
+            report_data_fallback(
+                "baostock",
+                "backtest_history_fallback",
+                exc,
+                context={"symbols": len(empty_syms)},
+            )
             pass  # baostock 也不可用时保持空帧，不影响其他股
 
     _history_cache[today_str] = cached
@@ -1422,7 +1514,10 @@ def fetch_index_history(ak_code: str, days_back: int = 200) -> "pd.DataFrame":
             start_d = (end_d - datetime.timedelta(days=int(days_back * 1.45) + 30)).isoformat()
             df = df[df["date"] >= start_d].reset_index(drop=True)
             df["pct_change"] = df["close"].pct_change() * 100
-    except Exception:
+    except Exception as exc:
+        report_data_fallback(
+            "akshare", "index_history", exc, context={"index": ak_code}
+        )
         df = pd.DataFrame()
     cache[ak_code] = df
     return df
@@ -1484,7 +1579,10 @@ def fetch_valuation(symbol: str) -> dict:
                 "as_of": str(last.get(date_col, ""))[:10],
                 "history_n": int(len(df)),
             }
-    except Exception:
+    except Exception as exc:
+        report_data_fallback(
+            "akshare", "valuation", exc, context={"symbol": symbol}
+        )
         result = {}
 
     cache[symbol] = result
@@ -1651,7 +1749,13 @@ def fetch_patterns_batch(symbols: list[str]) -> dict:
                             )
                             df = pd.DataFrame(rs.data, columns=rs.fields)
                             res = _compute_patterns(df)
-                        except Exception:
+                        except Exception as exc:
+                            report_data_fallback(
+                                "baostock",
+                                "stock_patterns",
+                                exc,
+                                context={"symbol": sym},
+                            )
                             res = dict(empty)
                     cache[sym] = res
             finally:
@@ -1662,6 +1766,12 @@ def fetch_patterns_batch(symbols: list[str]) -> dict:
             _bs_run(_work, timeout=120, label=f"形态判定 batch({len(missing)})")
             _pattern_cache[today_str] = cache
         except (BaostockBusy, BaostockTimeout, BaostockCooldown) as e:
+            report_data_fallback(
+                "baostock",
+                "stock_patterns_batch",
+                e,
+                context={"symbols": len(missing)},
+            )
             # 未跑到的留空（全 False）；调用方有 try/except 兜底
             print(f"[patterns] {e}")
             for s in missing:
