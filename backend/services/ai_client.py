@@ -203,8 +203,14 @@ def _build_payload(model: str, kwargs: dict) -> tuple[dict, float | tuple[float,
     if "top_p" in options:
         payload["top_p"] = options.pop("top_p")
 
+    tools_were_explicit = "tools" in options
     tools = _responses_tools(options.pop("tools", []) or [])
-    if not tools and settings.ark_web_search and _web_search_available is not False:
+    if (
+        not tools
+        and not tools_were_explicit
+        and settings.ark_web_search
+        and _web_search_available is not False
+    ):
         tools = [dict(_WEB_SEARCH_TOOL)]
     if tools:
         payload["tools"] = tools
@@ -214,7 +220,7 @@ def _build_payload(model: str, kwargs: dict) -> tuple[dict, float | tuple[float,
         options.pop("tool_choice", None)
 
     # 保留少量 Responses API 原生可选项，避免未来调用者再次改适配层。
-    for key in ("metadata", "service_tier", "reasoning"):
+    for key in ("metadata", "service_tier", "reasoning", "thinking"):
         if key in options:
             payload[key] = options.pop(key)
 

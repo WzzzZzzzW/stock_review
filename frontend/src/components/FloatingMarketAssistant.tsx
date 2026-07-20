@@ -551,7 +551,7 @@ export default function FloatingMarketAssistant({ page, phase }: Props) {
                   }
                 }}
                 rows={2}
-                placeholder="问当前市场、板块、股票或指标"
+                placeholder="问任何问题，也可结合当前页面"
                 className="max-h-28 min-h-[44px] flex-1 resize-none bg-transparent px-1 py-1 text-sm leading-5 text-white outline-none placeholder:text-gray-700"
               />
               <button

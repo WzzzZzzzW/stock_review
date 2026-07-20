@@ -77,6 +77,19 @@ class AIClientAdapterTests(unittest.TestCase):
         self.assertEqual(payload["tools"], [{"type": "web_search", "max_keyword": 3}])
         self.assertEqual(payload["tool_choice"], "auto")
 
+    def test_explicit_empty_tools_disables_implicit_web_search(self):
+        with patch.object(settings, "ark_web_search", True):
+            payload, _ = _build_payload("test-model", {
+                "messages": [{"role": "user", "content": "只输出最终答案"}],
+                "tools": [],
+                "tool_choice": "none",
+                "thinking": {"type": "disabled"},
+            })
+
+        self.assertNotIn("tools", payload)
+        self.assertNotIn("tool_choice", payload)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+
     def test_tool_choice_none_is_preserved(self):
         payload, _ = _build_payload("test-model", {
             "messages": [{"role": "user", "content": "不要调用工具"}],

@@ -76,6 +76,8 @@ def chat_stream(body: CopilotChatIn):
                     event = {**event, "response": final_response}
                 yield f"data: {json.dumps({**event, 'chat_id': chat_id, 'role': role_id, 'role_title': role['title']}, ensure_ascii=False)}\n\n"
 
+            if not final_response.strip():
+                raise RuntimeError("大模型未输出正文，本次结果未保存，请重试")
             saved = final_response
             if final_tools:
                 saved += "\n\n---\n*调用数据工具：" + "、".join(

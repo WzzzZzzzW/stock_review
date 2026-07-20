@@ -9,6 +9,7 @@ from services.ai_client import make_client, CHAT_MODEL
 from services.office_tools import get_tools_for_agent, execute_tool, AGENT_TOOLS
 
 MAX_TOOL_ROUNDS = 4   # 防止 LLM 工具调用死循环
+FINAL_ANSWER_MAX_TOKENS = 3000
 
 
 # ── 泄漏 tool-call 标记的兜底解析 / 清洗 ─────────────────────────────────
@@ -89,6 +90,38 @@ def _handle_leaked_calls(content, messages, tool_log) -> bool:
             ),
         })
     return True
+
+
+def _response_text(response) -> str:
+    """取出可展示正文；推理模型可能耗尽 token 却不输出正文。"""
+    if response.choices[0].finish_reason == "length":
+        return ""
+    return _strip_tool_markup(response.choices[0].message.content or "")
+
+
+def _force_final_answer(client, messages: list[dict], temperature: float = 0.3) -> str:
+    """工具调用后没有正文时，禁用所有工具并给模型足够的最终回答额度。"""
+    final_messages = [*messages, {
+        "role": "user",
+        "content": (
+            "现在停止检索和调用工具。仅基于已有对话和工具结果，直接回答用户最后一个问题。"
+            "必须输出可展示的正文；如果用户要求明确数字或结论，第一句就给出。"
+            "不要输出思考过程、工具标记或 XML 标签。"
+        ),
+    }]
+    response = client.chat.completions.create(
+        model=CHAT_MODEL,
+        messages=final_messages,
+        tools=[],
+        tool_choice="none",
+        thinking={"type": "disabled"},
+        max_tokens=FINAL_ANSWER_MAX_TOKENS,
+        temperature=temperature,
+    )
+    text = _response_text(response)
+    if not text:
+        raise RuntimeError("大模型已完成推理，但仍未输出正文，请重试")
+    return text
 
 
 # ── 角色定义 ────────────────────────────────────────────────────────────
@@ -347,7 +380,7 @@ def _run_with_tools(
             model=CHAT_MODEL, messages=messages,
             max_tokens=max_tokens, temperature=temperature,
         )
-        return resp.choices[0].message.content
+        return _response_text(resp) or _force_final_answer(client, messages, temperature)
 
     for _ in range(MAX_TOOL_ROUNDS):
         resp = client.chat.completions.create(
@@ -365,7 +398,7 @@ def _run_with_tools(
             # 模型可能把工具调用当正文吐了出来（泄漏标记）→ 手动执行并喂回
             if _handle_leaked_calls(msg.content or "", messages, tool_log):
                 continue
-            return _strip_tool_markup(msg.content or "")
+            return _response_text(resp) or _force_final_answer(client, messages, temperature)
 
         # 模型决定调工具，先把 assistant 的 tool_calls 消息附上
         # DeepSeek V4 thinking mode 要求 reasoning_content 一起回传
@@ -409,15 +442,7 @@ def _run_with_tools(
             })
 
     # 超出回合数，强制让 LLM 用现有信息总结
-    messages.append({
-        "role": "user",
-        "content": "请用一段自然语言给出最终分析结论，不要再调用工具，也不要输出任何工具调用标记或 XML 标签。",
-    })
-    resp = client.chat.completions.create(
-        model=CHAT_MODEL, messages=messages,
-        max_tokens=max_tokens, temperature=temperature,
-    )
-    return _strip_tool_markup(resp.choices[0].message.content or "")
+    return _force_final_answer(client, messages, temperature)
 
 
 # ── 单聊 ────────────────────────────────────────────────────────────────
@@ -456,7 +481,7 @@ def chat_with_agent(
         resp = client.chat.completions.create(
             model=CHAT_MODEL, messages=messages, max_tokens=2000, temperature=0.7,
         )
-        response = resp.choices[0].message.content
+        response = _response_text(resp) or _force_final_answer(client, messages)
 
     return {"response": response, "tool_calls": tool_log}
 
@@ -500,7 +525,8 @@ def chat_with_agent_stream(
         resp = client.chat.completions.create(
             model=CHAT_MODEL, messages=messages, max_tokens=2000, temperature=0.7,
         )
-        yield {"type": "final", "response": resp.choices[0].message.content or "", "tool_calls": []}
+        response = _response_text(resp) or _force_final_answer(client, messages)
+        yield {"type": "final", "response": response, "tool_calls": []}
         return
 
     tool_log: list[dict] = []
@@ -532,7 +558,8 @@ def chat_with_agent_stream(
                     })
                 yield {"type": "thinking"}
                 continue
-            yield {"type": "final", "response": _strip_tool_markup(msg.content or ""), "tool_calls": tool_log}
+            response = _response_text(resp) or _force_final_answer(client, messages)
+            yield {"type": "final", "response": response, "tool_calls": tool_log}
             return
 
         assistant_msg = {
@@ -567,14 +594,11 @@ def chat_with_agent_stream(
         yield {"type": "thinking"}
 
     # 超出最大回合，强制用现有信息总结
-    messages.append({
-        "role": "user",
-        "content": "请用一段自然语言给出最终分析结论，不要再调用工具，也不要输出任何工具调用标记或 XML 标签。",
-    })
-    resp = client.chat.completions.create(
-        model=CHAT_MODEL, messages=messages, max_tokens=2000, temperature=0.7,
-    )
-    yield {"type": "final", "response": _strip_tool_markup(resp.choices[0].message.content or ""), "tool_calls": tool_log}
+    yield {
+        "type": "final",
+        "response": _force_final_answer(client, messages),
+        "tool_calls": tool_log,
+    }
 
 
 # ── 开会 ────────────────────────────────────────────────────────────────

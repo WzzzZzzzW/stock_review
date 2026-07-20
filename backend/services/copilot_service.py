@@ -71,7 +71,11 @@ def list_copilot_roles() -> list[dict]:
 
 
 def _role_guidance(role_id: str, role: dict, question: str) -> str:
-    guidance = f"当前回答角色：{role['title']}。{role['instruction']}"
+    guidance = (
+        f"当前回答角色：{role['title']}。{role['instruction']}"
+        "\n用户可以问任何问题。如果问题与当前页面或投资无关，就像普通大模型一样直接回答，"
+        "忽略页面上不相关的行情上下文，不强行联系股票，也不为通用问题调用行情工具。"
+    )
     if role_id != "zhengxi":
         return guidance
     try:
@@ -181,7 +185,8 @@ def build_copilot_context(
         "extra": (
             "以下是服务器刚刚核验的页面和市场上下文。回答必须优先使用这些数据，"
             "不得把数据商净流入等推算口径当作绝对事实；若多个维度冲突，必须明确指出"
-            "哪个证据拥有更高决策权。\n" + _compact(evidence)
+            "哪个证据拥有更高决策权。但页面上下文只是补充材料；当它与用户的实际问题无关时，"
+            "必须忽略它并直接回答问题。\n" + _compact(evidence)
             + "\n\n## 本轮角色要求\n" + _role_guidance(role_id, role, question)
         )
     }
