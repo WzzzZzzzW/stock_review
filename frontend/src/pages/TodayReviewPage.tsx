@@ -1164,14 +1164,6 @@ function PostmarketIntelligencePanel({ intelligence, sourceLabel }: {
               <div className="mt-1 text-xs text-gray-500">不是建议区间</div>
             </div>
           </div>
-          {!!final.logic?.length && (
-            <div className="mt-5 border-t border-gray-800 pt-4">
-              <div className="mb-2 text-xs font-bold text-blue-300">结论逻辑</div>
-              <div className="space-y-2 text-xs leading-5 text-gray-400">
-                {final.logic.map((item, index) => <p key={index}>{item}</p>)}
-              </div>
-            </div>
-          )}
         </div>
       </section>
 
@@ -1180,29 +1172,42 @@ function PostmarketIntelligencePanel({ intelligence, sourceLabel }: {
           <Activity size={18} className="text-blue-300" />
           <div>
             <div className="text-base font-bold text-white">02 四个核心判断</div>
-            <div className="text-xs text-gray-500">只保留真正决定操作的量价、赚钱效应、失败代价和轮动</div>
+            <div className="text-xs text-gray-500">结论和动作直接展示，完整推导按需展开</div>
           </div>
         </div>
         <div className="divide-y divide-gray-800">
           {core.map((item, index) => (
             <div key={item.key} className={'border-l-4 px-5 py-4 ' + judgementTone(item.tone)}>
-              <div className="flex items-center gap-3">
-                <span className="font-mono text-xs text-gray-600">{String(index + 1).padStart(2, '0')}</span>
-                <h4 className="text-sm font-bold text-white">{item.title}</h4>
-                <span className={'ml-auto rounded border px-2 py-0.5 text-[11px] font-bold ' + judgementLabelTone(item.tone)}>
-                  {item.tone === 'attack' ? '支持参与' : item.tone === 'risk' ? '要求收缩' : '保持约束'}
-                </span>
-              </div>
-              <p className="mt-2 text-base font-semibold leading-6 text-white">{item.conclusion}</p>
-              <p className="mt-2 text-sm leading-6 text-gray-400">{item.logic}</p>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                {item.evidence.map((evidence, evidenceIndex) => (
-                  <span key={evidenceIndex} className="rounded border border-gray-800 bg-gray-900/80 px-2.5 py-1 text-xs text-gray-300">{evidence}</span>
-                ))}
-              </div>
-              <div className="mt-3 grid grid-cols-[64px_minmax(0,1fr)] gap-3 text-sm leading-6">
-                <span className="font-bold text-blue-400">动作</span>
-                <span className="font-semibold text-blue-200">{item.action}</span>
+              <div className="grid grid-cols-[190px_minmax(0,1fr)_320px] gap-6">
+                <div>
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-xs text-gray-600">{String(index + 1).padStart(2, '0')}</span>
+                    <h4 className="text-sm font-bold text-white">{item.title}</h4>
+                  </div>
+                  <span className={'mt-3 inline-flex rounded border px-2 py-0.5 text-[11px] font-bold ' + judgementLabelTone(item.tone)}>
+                    {item.tone === 'attack' ? '支持参与' : item.tone === 'risk' ? '要求收缩' : '保持约束'}
+                  </span>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-base font-semibold leading-6 text-white">{item.conclusion}</p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {item.evidence.map((evidence, evidenceIndex) => (
+                      <span key={evidenceIndex} className="rounded border border-gray-800 bg-gray-900/80 px-2.5 py-1 text-xs text-gray-300">{evidence}</span>
+                    ))}
+                  </div>
+                  {item.logic && (
+                    <details className="group mt-3">
+                      <summary className="cursor-pointer select-none text-xs font-semibold text-gray-500 hover:text-blue-300">
+                        查看推导逻辑
+                      </summary>
+                      <p className="mt-2 border-l border-gray-700 pl-3 text-sm leading-6 text-gray-400">{item.logic}</p>
+                    </details>
+                  )}
+                </div>
+                <div className="border-l border-gray-800 pl-5">
+                  <div className="text-xs font-bold text-blue-400">对应动作</div>
+                  <div className="mt-2 text-sm font-semibold leading-6 text-blue-200">{item.action}</div>
+                </div>
               </div>
             </div>
           ))}

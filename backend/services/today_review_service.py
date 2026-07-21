@@ -565,7 +565,6 @@ def _intelligence_market_review(intelligence: dict) -> str:
         f"市场判断：{final.get('market_judgement') or verdict.get('summary') or '等待数据确认'}",
         f"赚钱效应：{final.get('money_effect') or '等待数据确认'}",
         f"明日仓位：{position_plan}",
-        "逻辑：" + " ".join(final.get("logic") or verdict.get("evidence") or []),
         "### 二、四个核心判断",
         "\n\n".join(core_rows) or "新版核心判断正在生成。",
         "### 三、主线与轮动",

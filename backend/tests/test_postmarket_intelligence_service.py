@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.postmarket_intelligence_service import (  # noqa: E402
     _core_judgements,
+    _final_conclusion,
     _intraday_path,
     _mainline_analysis,
     _mainlines,
@@ -17,6 +18,24 @@ from services.postmarket_intelligence_service import (  # noqa: E402
 
 
 class PostmarketIntelligenceTests(unittest.TestCase):
+    def test_final_conclusion_does_not_repeat_core_reasoning(self):
+        core = [
+            {"conclusion": "量价结论", "logic": "量价完整推导"},
+            {"conclusion": "赚钱效应结论", "logic": "赚钱效应完整推导"},
+            {"conclusion": "失败代价结论", "logic": "失败代价完整推导"},
+            {"conclusion": "轮动结论", "logic": "轮动完整推导"},
+        ]
+
+        final = _final_conclusion(
+            {"stance": "进攻", "position_cap": 60, "regime": "结构性进攻"},
+            core,
+            {"themes": [{"name": "半导体"}]},
+        )
+
+        self.assertNotIn("logic", final)
+        self.assertEqual(final["money_effect"], "赚钱效应结论")
+        self.assertIn("半导体", final["position_plan"])
+
     def test_weight_supported_broad_decline_is_not_called_repair(self):
         market = {
             "breadth": {"up": 1709, "down": 3415, "up_ratio": 32.9},

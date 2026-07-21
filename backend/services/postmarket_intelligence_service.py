@@ -581,7 +581,6 @@ def _final_conclusion(verdict: dict, core: list[dict], mainline_analysis: dict) 
         "market_judgement": market_judgement,
         "money_effect": core[1]["conclusion"],
         "position_plan": f"明日总仓位上限{cap}%，主看{focus_text}。",
-        "logic": [core[0]["logic"], core[1]["logic"], f"{core[2]['logic']}{core[3]['logic']}"],
     }
 
 
