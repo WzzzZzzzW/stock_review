@@ -456,8 +456,8 @@ def _personal_impact(rotations: list[dict]) -> dict:
 
 
 def _capital_map(rotations: list[dict]) -> dict:
-    inflow = sorted(rotations, key=lambda row: row.get("net_in", 0), reverse=True)[:6]
-    outflow = sorted(rotations, key=lambda row: row.get("net_in", 0))[:5]
+    inflow = sorted(rotations, key=lambda row: row.get("net_in", 0), reverse=True)[:10]
+    outflow = sorted(rotations, key=lambda row: row.get("net_in", 0))[:10]
     return {
         "inflow": inflow,
         "outflow": outflow,

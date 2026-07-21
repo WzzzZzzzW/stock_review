@@ -343,11 +343,11 @@ export default function MarketRadarPanel({ phase, data, loading, onOpenResearch 
         <div className="grid gap-px bg-gray-800 lg:grid-cols-2">
           <div className="bg-gray-900">
             <div className="flex items-center gap-2 border-b border-gray-800 px-4 py-2 text-xs font-medium text-red-300"><ArrowUpRight className="h-4 w-4" />净流入靠前</div>
-            <div className="divide-y divide-gray-800">{(data.capital?.inflow || []).slice(0, 5).map(row => <div key={row.name} className="flex items-center gap-3 px-4 py-2.5 text-sm"><span className="min-w-0 flex-1 truncate text-gray-300">{row.name} · {row.state}</span><span className={pctClass(row.net_in)}>{money(row.net_in)}</span><AskAiButton phase={phase} type="sector" name={row.name} data={{ ...row }} question={sectorQuestion(row)} /></div>)}</div>
+            <div className="divide-y divide-gray-800">{(data.capital?.inflow || []).slice(0, 10).map(row => <div key={row.name} className="flex items-center gap-3 px-4 py-2.5 text-sm"><span className="min-w-0 flex-1 truncate text-gray-300">{row.name} · {row.state}</span><span className={pctClass(row.net_in)}>{money(row.net_in)}</span><AskAiButton phase={phase} type="sector" name={row.name} data={{ ...row }} question={sectorQuestion(row)} /></div>)}</div>
           </div>
           <div className="bg-gray-900">
             <div className="flex items-center gap-2 border-b border-gray-800 px-4 py-2 text-xs font-medium text-emerald-300"><ArrowDownRight className="h-4 w-4" />净流出靠前</div>
-            <div className="divide-y divide-gray-800">{(data.capital?.outflow || []).slice(0, 5).map(row => <div key={row.name} className="flex items-center gap-3 px-4 py-2.5 text-sm"><span className="min-w-0 flex-1 truncate text-gray-300">{row.name} · {row.state}</span><span className={pctClass(row.net_in)}>{money(row.net_in)}</span><AskAiButton phase={phase} type="sector" name={row.name} data={{ ...row }} question={sectorQuestion(row)} /></div>)}</div>
+            <div className="divide-y divide-gray-800">{(data.capital?.outflow || []).slice(0, 10).map(row => <div key={row.name} className="flex items-center gap-3 px-4 py-2.5 text-sm"><span className="min-w-0 flex-1 truncate text-gray-300">{row.name} · {row.state}</span><span className={pctClass(row.net_in)}>{money(row.net_in)}</span><AskAiButton phase={phase} type="sector" name={row.name} data={{ ...row }} question={sectorQuestion(row)} /></div>)}</div>
           </div>
         </div>
       </section>

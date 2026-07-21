@@ -1,10 +1,23 @@
 import unittest
 from unittest.mock import patch
 
-from services.market_radar_service import classify_sector_state, evaluate_radar_day
+from services.market_radar_service import _capital_map, classify_sector_state, evaluate_radar_day
 
 
 class MarketRadarStateTests(unittest.TestCase):
+    def test_capital_map_returns_top_ten_in_both_directions(self):
+        rotations = [
+            {"name": f"板块{i}", "net_in": float(i)}
+            for i in range(-7, 8)
+        ]
+
+        result = _capital_map(rotations)
+
+        self.assertEqual(len(result["inflow"]), 10)
+        self.assertEqual(len(result["outflow"]), 10)
+        self.assertEqual(result["inflow"][0]["net_in"], 7.0)
+        self.assertEqual(result["outflow"][0]["net_in"], -7.0)
+
     def test_sector_expansion_requires_breadth_and_score(self):
         result = classify_sector_state(
             {"name": "半导体", "score": 74, "pct": 2.1, "breadth": 0.76, "net_in": 5.2, "rank": 2},
