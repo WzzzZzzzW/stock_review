@@ -125,6 +125,40 @@ type PostmarketIntelligence = {
     sector_hit_rate?: number
     lessons?: string[]
   }
+  learning?: {
+    state?: string
+    label?: string
+    valid_outcomes?: number
+    minimum_samples?: number
+    progress_pct?: number
+    update_interval?: number
+    effective_version?: string
+    effective_weights?: { key: string; label: string; weight: number }[]
+    latest_audit?: {
+      decision_date?: string
+      outcome_date?: string
+      title?: string
+      overall_score?: number
+      prior_stance?: string
+      prior_position_cap?: number
+      actual_stance?: string
+      actual_regime?: string
+      risk_budget_score?: number
+      regime_persisted?: boolean
+      focus_hit_rate?: number | null
+      focus_details?: { name: string; followed: boolean; state: string; score?: number }[]
+      lessons?: string[]
+    }
+    latest_attempt?: {
+      version?: string
+      status?: string
+      sample_count?: number
+      changes?: Record<string, { label?: string; before?: number; after?: number }>
+    }
+    factor_learning?: { key: string; label: string; sample_count: number; next_day_risk_rate?: number | null }[]
+    next_action?: string
+    guardrails?: string[]
+  }
   tomorrow_plan?: {
     default_action?: string
     position_cap?: number
@@ -881,6 +915,10 @@ function PostmarketIntelligencePanel({ intelligence, sourceLabel }: {
   const path = intelligence.intraday_path || {}
   const plan = intelligence.tomorrow_plan || {}
   const audit = intelligence.audit || {}
+  const learning = intelligence.learning || {}
+  const yesterdayAudit = learning.latest_audit
+  const factorLearning = new Map((learning.factor_learning || []).map(item => [item.key, item]))
+  const learningAttempt = learning.latest_attempt
   const tone = verdict.stance === '防守' || verdict.stance === '收缩'
     ? 'border-emerald-800/60 bg-emerald-950/15'
     : verdict.stance === '进攻' || verdict.stance === '试错'
@@ -1000,10 +1038,103 @@ function PostmarketIntelligencePanel({ intelligence, sourceLabel }: {
       </section>
 
       <section className="rounded-lg border border-gray-800 bg-gray-950/45 p-4">
-        <div className="text-sm font-bold text-white">判断审计</div>
+        <div className="text-sm font-bold text-white">当日判断审计（盘中 → 收盘）</div>
         <p className="mt-2 text-sm leading-6 text-gray-300">{audit.ready ? audit.verdict : audit.verdict || '盘中判断样本不足，本日不做命中率评价。'}</p>
         {audit.market?.summary && <p className="mt-1 text-xs leading-5 text-gray-500">{audit.market.summary}</p>}
         {!!audit.lessons?.length && <p className="mt-2 text-xs leading-5 text-blue-300">修正：{audit.lessons.join(' ')}</p>}
+      </section>
+
+      <section className="overflow-hidden rounded-lg border border-indigo-900/60 bg-indigo-950/10">
+        <div className="flex items-center justify-between gap-4 border-b border-indigo-900/40 px-4 py-3">
+          <div>
+            <div className="text-sm font-bold text-white">昨日判断审计与自动学习</div>
+            <div className="mt-0.5 text-xs text-gray-500">客观结果负责打分，AI负责归因；未达到门槛绝不修改权重</div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs font-bold text-indigo-300">{learning.label || '学习系统准备中'}</div>
+            <div className="mt-0.5 text-[11px] text-gray-600">有效版本 {learning.effective_version || 'L0'}</div>
+          </div>
+        </div>
+
+        <div className="px-4 py-4">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-gray-400">有效次日结果 {learning.valid_outcomes ?? 0} / {learning.minimum_samples ?? 30}</span>
+            <span className="text-gray-600">每 {learning.update_interval ?? 5} 个交易日重新验证</span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded bg-gray-900">
+            <div className="h-full bg-indigo-500 transition-all" style={{ width: `${Math.min(100, Math.max(0, learning.progress_pct ?? 0))}%` }} />
+          </div>
+          <p className="mt-2 text-xs leading-5 text-gray-500">{learning.next_action}</p>
+        </div>
+
+        {yesterdayAudit ? (
+          <div className="border-t border-indigo-900/40 px-4 py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-sm font-bold text-white">{yesterdayAudit.title}</div>
+                <div className="mt-1 text-xs text-gray-500">
+                  {yesterdayAudit.decision_date} 判断：{yesterdayAudit.prior_stance}、仓位上限 {yesterdayAudit.prior_position_cap}%
+                  <span className="mx-2">→</span>
+                  {yesterdayAudit.outcome_date} 实际：{yesterdayAudit.actual_regime}（{yesterdayAudit.actual_stance}）
+                </div>
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="font-mono text-2xl font-bold text-indigo-200">{yesterdayAudit.overall_score ?? '--'}</div>
+                <div className="text-[10px] text-gray-600">审计得分</div>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+              <span className="rounded bg-gray-950/70 px-2 py-1 text-gray-300">风险预算 {yesterdayAudit.risk_budget_score ?? '--'}分</span>
+              <span className="rounded bg-gray-950/70 px-2 py-1 text-gray-300">状态延续 {yesterdayAudit.regime_persisted ? '是' : '否'}</span>
+              <span className="rounded bg-gray-950/70 px-2 py-1 text-gray-300">主线延续率 {yesterdayAudit.focus_hit_rate == null ? '无样本' : `${yesterdayAudit.focus_hit_rate}%`}</span>
+            </div>
+            {!!yesterdayAudit.lessons?.length && (
+              <div className="mt-3 space-y-1 text-xs leading-5 text-indigo-200">
+                {yesterdayAudit.lessons.map((lesson, index) => <div key={index}>学习：{lesson}</div>)}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="border-t border-indigo-900/40 px-4 py-4 text-xs leading-5 text-gray-500">
+            第一条判断已进入账本。下一交易日盘后生成后，系统会用真实结果形成首份“昨日判断审计”。
+          </div>
+        )}
+
+        {!!learning.effective_weights?.length && (
+          <div className="border-t border-indigo-900/40 px-4 py-4">
+            <div className="mb-2 text-xs font-semibold text-gray-400">当前风险因子权重</div>
+            <div className="grid grid-cols-3 gap-x-5 gap-y-2 text-xs">
+              {learning.effective_weights.map(item => (
+                <div key={item.key} className="flex items-center justify-between border-b border-gray-800/70 py-1.5">
+                  <div>
+                    <div className="text-gray-400">{item.label}</div>
+                    {factorLearning.get(item.key)?.next_day_risk_rate != null && (
+                      <div className="mt-0.5 text-[10px] text-gray-600">
+                        {factorLearning.get(item.key)?.sample_count}次触发 · 次日风险率 {factorLearning.get(item.key)?.next_day_risk_rate}%
+                      </div>
+                    )}
+                  </div>
+                  <span className="font-mono font-bold text-indigo-300">{item.weight.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {learningAttempt && (
+          <div className="border-t border-indigo-900/40 px-4 py-3 text-xs">
+            <span className={learningAttempt.status === 'promoted' ? 'font-bold text-red-300' : 'font-bold text-emerald-300'}>
+              {learningAttempt.status === 'promoted' ? '候选权重已通过验证' : '候选权重已拒绝，继续使用旧版本'}
+            </span>
+            <span className="ml-2 text-gray-600">{learningAttempt.version} · {learningAttempt.sample_count}个样本</span>
+          </div>
+        )}
+
+        {!!learning.guardrails?.length && (
+          <div className="border-t border-indigo-900/40 px-4 py-3 text-[11px] leading-5 text-gray-600">
+            保护边界：{learning.guardrails.join(' ')}
+          </div>
+        )}
       </section>
 
       <section className="rounded-lg border border-blue-800/60 bg-blue-950/15 p-4">

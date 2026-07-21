@@ -208,7 +208,15 @@ def _mainlines(snapshots: list[dict]) -> list[dict]:
     return result
 
 
-def _regime(metrics: dict, path: dict) -> dict:
+def _regime(metrics: dict, path: dict, risk_weights: dict | None = None) -> dict:
+    risk_weights = risk_weights or {
+        "breadth_low": 2.0,
+        "loss_pressure": 2.0,
+        "broken_high": 1.0,
+        "size_divergence": 1.0,
+        "index_divergence": 1.0,
+        "intraday_weakened": 1.0,
+    }
     up_ratio = metrics["up_ratio"]
     zt, dt = metrics["zt"], metrics["dt"]
     broken_ratio = metrics["broken_ratio"]
@@ -219,32 +227,32 @@ def _regime(metrics: dict, path: dict) -> dict:
     reasons = []
 
     if up_ratio < 35:
-        risk += 2
+        risk += _f(risk_weights.get("breadth_low"), 2.0)
         reasons.append(f"上涨占比仅{up_ratio:.1f}%")
     elif up_ratio >= 60:
         attack += 2
         reasons.append(f"上涨占比达到{up_ratio:.1f}%")
     if dt > max(zt * 1.2, 20):
-        risk += 2
+        risk += _f(risk_weights.get("loss_pressure"), 2.0)
         reasons.append(f"跌停{dt}只显著多于涨停{zt}只")
     elif zt > max(dt * 2, 50):
         attack += 2
         reasons.append(f"涨停{zt}只且明显压过跌停")
     if broken_ratio >= 35:
-        risk += 1
+        risk += _f(risk_weights.get("broken_high"), 1.0)
         reasons.append(f"炸板率{broken_ratio:.1f}%")
     elif broken_ratio and broken_ratio <= 22:
         attack += 1
     if size_gap >= 2:
-        risk += 1
+        risk += _f(risk_weights.get("size_divergence"), 1.0)
         reasons.append(f"超大盘领先小盘{size_gap:.2f}个百分点")
     elif size_gap <= -1:
         attack += 1
     if dispersion >= 1.5:
-        risk += 1
+        risk += _f(risk_weights.get("index_divergence"), 1.0)
         reasons.append(f"指数分化{dispersion:.2f}个百分点")
     if path.get("available") and _f(path.get("score_delta")) <= -8:
-        risk += 1
+        risk += _f(risk_weights.get("intraday_weakened"), 1.0)
         reasons.append("盘中市场评分明显下滑")
     elif path.get("available") and _f(path.get("score_delta")) >= 8:
         attack += 1
@@ -397,7 +405,12 @@ def build_postmarket_intelligence(trade_date: str, market: dict) -> dict:
     history = _history_context(trade_date, metrics)
     path, snapshots = _intraday_path(trade_date)
     mainlines = _mainlines(snapshots)
-    verdict = _regime(metrics, path)
+    try:
+        from services.decision_learning_service import get_effective_weights
+        risk_weights, learning_version = get_effective_weights()
+    except Exception:
+        risk_weights, learning_version = None, {"version": "L0", "sample_count": 0}
+    verdict = _regime(metrics, path, risk_weights)
     undercurrents = _undercurrents(metrics, history, path, mainlines)
     try:
         from services.market_radar_service import evaluate_radar_day
@@ -408,6 +421,11 @@ def build_postmarket_intelligence(trade_date: str, market: dict) -> dict:
         "generated_at": datetime.now().isoformat(),
         "engine": "postmarket-intelligence-v1",
         "data_scope": "收盘全市场 + 历史日档案 + 盘中市场雷达",
+        "learning_basis": {
+            "version": learning_version.get("version", "L0"),
+            "sample_count": learning_version.get("sample_count", 0),
+            "risk_weights": risk_weights or {},
+        },
         "metrics": metrics,
         "verdict": verdict,
         "historical_context": history,

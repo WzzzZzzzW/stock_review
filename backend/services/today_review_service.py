@@ -453,6 +453,8 @@ def _intelligence_market_review(intelligence: dict) -> str:
     mainlines = intelligence.get("mainlines") or []
     plan = intelligence.get("tomorrow_plan") or {}
     audit = intelligence.get("audit") or {}
+    learning = intelligence.get("learning") or {}
+    yesterday_audit = learning.get("latest_audit") or {}
     signals = []
     for item in undercurrents:
         signals.append(
@@ -468,6 +470,13 @@ def _intelligence_market_review(intelligence: dict) -> str:
             f"{row.get('evidence')} 结论：{row.get('action')}。"
         )
     audit_text = audit.get("verdict") if audit.get("ready") else "盘中判断样本不足，本日不做命中率评价。"
+    learning_text = (
+        f"{yesterday_audit.get('title')}，审计得分{yesterday_audit.get('overall_score')}。"
+        f"{' '.join(yesterday_audit.get('lessons') or [])}"
+        if yesterday_audit else
+        f"{learning.get('label', '学习样本积累中')}：已有{learning.get('valid_outcomes', 0)}个有效次日结果，"
+        f"达到{learning.get('minimum_samples', 30)}个后才允许更新权重。"
+    )
     return "\n".join([
         "### 今日战场定性",
         f"**{verdict.get('summary', '证据不足，默认防守。')}** 置信度 {verdict.get('confidence', 0)}%。"
@@ -482,6 +491,8 @@ def _intelligence_market_review(intelligence: dict) -> str:
         f"当前结论只使用已保存证据，不用固定阈值硬套过去行情。",
         "### 判断审计",
         audit_text,
+        "### 昨日判断与系统学习",
+        learning_text,
         "### 明日唯一执行方案",
         f"**默认动作：{plan.get('default_action', '防守')}，总仓位上限 {plan.get('position_cap', 20)}%。** "
         f"主看：{'、'.join(plan.get('focus') or []) or '没有通过验证的进攻方向'}；"
@@ -615,6 +626,7 @@ market_review, portfolio_review, watchlist_review, industry_review, internationa
 - market_review 必须以 postmarket_intelligence 为分析骨架，先给唯一的市场状态和仓位上限，再解释指数与广度背离、大小盘裂口、亏钱效应、历史分位、盘中路径和主线生命周期。
 - 严格区分事实、推断和动作；不得把推算净流入写成绝对资金事实，不得在缺少盘中快照时编造盘中路径。
 - 必须审计早段判断是否被收盘验证，不能只复述收盘涨跌幅。
+- 若 postmarket_intelligence.learning.latest_audit 存在，必须解释昨日仓位预算、主线判断和今日实际结果；若仍在 collecting 状态，只能写“积累样本”，禁止声称AI已经完成权重更新。
 - 持仓复盘要做账户归因：区分市场Beta、行业暴露、个股相对强弱和交易假设是否失效，给每只持仓唯一动作。
 - 行业板块要分析为什么这些行业强/弱、是否轮动、持续性怎么看。
 - 国际形势要写清楚国际事件映射到 A 股哪些方向，以及哪些方向纳入计划、哪些方向直接排除，不能只贴新闻标题。
@@ -662,6 +674,17 @@ def build_today_review(trade_date: str, watchlist: list[dict] | None = None, pro
     from services.postmarket_intelligence_service import build_postmarket_intelligence
 
     intelligence = build_postmarket_intelligence(trade_date, market)
+    try:
+        from services.decision_learning_service import record_decision_and_learn
+        intelligence["learning"] = record_decision_and_learn(trade_date, intelligence)
+    except Exception as exc:
+        intelligence["learning"] = {
+            "state": "error",
+            "label": "自动学习暂不可用",
+            "valid_outcomes": 0,
+            "minimum_samples": 30,
+            "next_action": str(exc),
+        }
     analysis = _build_ai_block_analysis(
         market, portfolio, watch, industry, international, intelligence, progress_cb
     )
