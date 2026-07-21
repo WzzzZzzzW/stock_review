@@ -446,60 +446,66 @@ def _watchlist_review_text(watchlist: dict) -> str:
 
 
 def _intelligence_market_review(intelligence: dict) -> str:
+    final = intelligence.get("final_conclusion") or {}
     verdict = intelligence.get("verdict") or {}
-    history = intelligence.get("historical_context") or {}
-    path = intelligence.get("intraday_path") or {}
-    undercurrents = intelligence.get("undercurrents") or []
-    mainlines = intelligence.get("mainlines") or []
+    core = intelligence.get("core_judgements") or []
+    mainline = intelligence.get("mainline_analysis") or {}
     plan = intelligence.get("tomorrow_plan") or {}
-    audit = intelligence.get("audit") or {}
     learning = intelligence.get("learning") or {}
     yesterday_audit = learning.get("latest_audit") or {}
-    signals = []
-    for item in undercurrents:
-        signals.append(
-            f"**{item.get('title', '市场信号')}**\n\n"
-            f"事实：{item.get('evidence', '暂无')}\n\n"
-            f"推断：{item.get('inference', '暂无')}\n\n"
-            f"动作：{item.get('action', '暂无')}"
+
+    core_rows = []
+    for item in core:
+        core_rows.append(
+            f"**{item.get('title')}：{item.get('conclusion')}**\n\n"
+            f"逻辑：{item.get('logic')}\n\n"
+            f"动作：{item.get('action')}"
         )
+
     line_rows = []
-    for row in mainlines[:6]:
+    for row in (mainline.get("rows") or [])[:6]:
         line_rows.append(
-            f"- **{row.get('name')}｜{row.get('level')}｜{row.get('state')}**："
-            f"{row.get('evidence')} 结论：{row.get('action')}。"
+            f"- **{row.get('name')}｜{row.get('stage') or row.get('level')}**："
+            f"{row.get('logic') or row.get('evidence')} "
+            f"结论：{row.get('judgement') or row.get('action')}；"
+            f"失效条件：{row.get('invalidation') or '等待次日验证'}"
         )
-    audit_text = audit.get("verdict") if audit.get("ready") else "盘中判断样本不足，本日不做命中率评价。"
-    learning_text = (
-        f"{yesterday_audit.get('title')}，审计得分{yesterday_audit.get('overall_score')}。"
-        f"{' '.join(yesterday_audit.get('lessons') or [])}"
-        if yesterday_audit else
-        f"{learning.get('label', '学习样本积累中')}：已有{learning.get('valid_outcomes', 0)}个有效次日结果，"
-        f"达到{learning.get('minimum_samples', 30)}个后才允许更新权重。"
-    )
+
+    if yesterday_audit:
+        yesterday_text = (
+            f"**昨日判断：{yesterday_audit.get('judgement', '待复核')}。** "
+            f"昨天为{yesterday_audit.get('prior_stance')}、仓位上限{yesterday_audit.get('prior_position_cap')}%；"
+            f"今天实际为{yesterday_audit.get('actual_regime')}（{yesterday_audit.get('actual_stance')}）。\n\n"
+            f"系统处理：{yesterday_audit.get('learning_action')}"
+        )
+    else:
+        yesterday_text = "尚无可对齐的相邻交易日样本。"
+    position_plan = final.get("position_plan") or f"总仓位上限{verdict.get('position_cap', 20)}%"
+
     return "\n".join([
-        "### 今日战场定性",
-        f"**{verdict.get('summary', '证据不足，默认防守。')}** 置信度 {verdict.get('confidence', 0)}%。"
-        f"核心依据：{'；'.join(verdict.get('evidence') or ['暂无完整证据'])}。",
-        "### 市场之下的暗流",
-        "\n\n".join(signals) or "当前没有形成可验证的暗流信号。",
-        "### 主线生命周期",
-        "\n".join(line_rows) or "没有板块同时通过收盘评分、上涨广度和盘中持续率验证，主线为空。",
-        "### 历史位置与盘中路径",
-        f"历史坐标：{history.get('window', '暂无历史样本')}。"
-        f"盘中路径：{path.get('summary', '盘中快照不足')} "
-        f"当前结论只使用已保存证据，不用固定阈值硬套过去行情。",
-        "### 判断审计",
-        audit_text,
-        "### 昨日判断与系统学习",
-        learning_text,
-        "### 明日唯一执行方案",
-        f"**默认动作：{plan.get('default_action', '防守')}，总仓位上限 {plan.get('position_cap', 20)}%。** "
-        f"主看：{'、'.join(plan.get('focus') or []) or '没有通过验证的进攻方向'}；"
-        f"回避：{'、'.join(plan.get('avoid') or []) or '按盘中退潮信号动态剔除'}。\n\n"
-        f"升级条件：{plan.get('upgrade_condition', '暂无')}\n\n"
-        f"降级条件：{plan.get('downgrade_condition', '暂无')}",
+        "### 一、今日最终结论",
+        f"**今日定性：{final.get('headline') or verdict.get('regime') or '待确认'}。**",
+        f"市场判断：{final.get('market_judgement') or verdict.get('summary') or '等待数据确认'}",
+        f"赚钱效应：{final.get('money_effect') or '等待数据确认'}",
+        f"明日仓位：{position_plan}",
+        "逻辑：" + " ".join(final.get("logic") or verdict.get("evidence") or []),
+        "### 二、四个核心判断",
+        "\n\n".join(core_rows) or "新版核心判断正在生成。",
+        "### 三、主线与轮动",
+        mainline.get("rotation_summary") or "没有方向通过资金、广度、龙头和持续性共同验证。",
+        "\n".join(line_rows) or "主线为空，不用涨幅榜强行选方向。",
+        "### 四、明日唯一执行方案",
+        f"**{plan.get('base_case') or '默认防守，总仓位上限20%。'}**",
+        f"依据：{plan.get('rationale') or '等待完整证据'}",
+        f"允许：{plan.get('allowed') or '只做确认方向'}",
+        f"禁止：{plan.get('forbidden') or '不追后排'}",
+        f"升级：{plan.get('upgrade_condition') or '暂无'}",
+        f"降级：{plan.get('downgrade_condition') or '暂无'}",
+        "### 五、昨日判断审计",
+        yesterday_text,
     ])
+
+
 
 
 def _fallback_analysis(

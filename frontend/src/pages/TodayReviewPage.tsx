@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { RefreshCw } from 'lucide-react'
+import { Activity, Crosshair, History, Layers3, RefreshCw, Target } from 'lucide-react'
 import MarketRadarEvaluation from '../components/MarketRadarEvaluation'
 import { useWatchlist } from '../stores/watchlistStore'
 
@@ -83,6 +83,20 @@ type MainlineState = {
   leader: string
   persistence: number
   evidence: string
+  stage?: string
+  logic?: string
+  judgement?: string
+  invalidation?: string
+}
+
+type CoreJudgement = {
+  key: string
+  title: string
+  conclusion: string
+  logic: string
+  evidence: string[]
+  action: string
+  tone: 'attack' | 'risk' | 'neutral'
 }
 
 type PostmarketIntelligence = {
@@ -96,6 +110,15 @@ type PostmarketIntelligence = {
     summary?: string
     evidence?: string[]
   }
+  final_conclusion?: {
+    headline?: string
+    stance?: string
+    market_judgement?: string
+    money_effect?: string
+    position_plan?: string
+    logic?: string[]
+  }
+  core_judgements?: CoreJudgement[]
   historical_context?: {
     sample_days?: number
     window?: string
@@ -103,6 +126,10 @@ type PostmarketIntelligence = {
     medians?: Record<string, number>
     previous_date?: string
     changes_vs_previous?: Record<string, number>
+    amount_avg_5?: number | null
+    amount_avg_20?: number | null
+    amount_ratio_5?: number | null
+    amount_ratio_20?: number | null
   }
   intraday_path?: {
     available?: boolean
@@ -118,6 +145,19 @@ type PostmarketIntelligence = {
   }
   undercurrents?: IntelligenceSignal[]
   mainlines?: MainlineState[]
+  mainline_analysis?: {
+    rotation_summary?: string
+    rows?: MainlineState[]
+    themes?: {
+      name: string
+      members: string[]
+      leader: string
+      score: number
+      breadth: number
+      persistence: number
+      net_in: number
+    }[]
+  }
   audit?: {
     ready?: boolean
     verdict?: string
@@ -176,6 +216,10 @@ type PostmarketIntelligence = {
     focus?: string[]
     avoid?: string[]
     base_case?: string
+    rationale?: string
+    allowed?: string
+    forbidden?: string
+    execution?: string
     upgrade_condition?: string
     downgrade_condition?: string
   }
@@ -921,254 +965,297 @@ function PostmarketIntelligencePanel({ intelligence, sourceLabel }: {
   sourceLabel?: string
 }) {
   const verdict = intelligence.verdict || {}
-  const history = intelligence.historical_context || {}
-  const percentiles = history.percentiles || {}
-  const path = intelligence.intraday_path || {}
+  const final = intelligence.final_conclusion || {}
+  const core = intelligence.core_judgements || []
+  const mainline = intelligence.mainline_analysis || {}
+  const mainlineRows = mainline.rows || intelligence.mainlines || []
   const plan = intelligence.tomorrow_plan || {}
+  const history = intelligence.historical_context || {}
+  const path = intelligence.intraday_path || {}
   const audit = intelligence.audit || {}
   const learning = intelligence.learning || {}
   const yesterdayAudit = learning.latest_audit
   const factorLearning = new Map((learning.factor_learning || []).map(item => [item.key, item]))
   const learningAttempt = learning.latest_attempt
+
+  const stanceTone = verdict.stance === '防守' || verdict.stance === '收缩'
+    ? 'border-emerald-800 bg-emerald-950/40 text-emerald-300'
+    : verdict.stance === '进攻' || verdict.stance === '试错'
+      ? 'border-red-800 bg-red-950/40 text-red-300'
+      : 'border-blue-800 bg-blue-950/40 text-blue-300'
+  const judgementTone = (tone?: CoreJudgement['tone']) => tone === 'attack'
+    ? 'border-l-red-500'
+    : tone === 'risk'
+      ? 'border-l-emerald-500'
+      : 'border-l-blue-500'
+  const judgementLabelTone = (tone?: CoreJudgement['tone']) => tone === 'attack'
+    ? 'border-red-900/70 bg-red-950/25 text-red-300'
+    : tone === 'risk'
+      ? 'border-emerald-900/70 bg-emerald-950/25 text-emerald-300'
+      : 'border-blue-900/70 bg-blue-950/25 text-blue-300'
   const auditResultTone = yesterdayAudit?.judgement_level === 'correct'
     ? 'border-red-800/60 bg-red-950/15 text-red-300'
     : yesterdayAudit?.judgement_level === 'wrong'
       ? 'border-emerald-800/60 bg-emerald-950/15 text-emerald-300'
       : 'border-amber-800/60 bg-amber-950/15 text-amber-300'
-  const tone = verdict.stance === '防守' || verdict.stance === '收缩'
-    ? 'border-emerald-800/60 bg-emerald-950/15'
-    : verdict.stance === '进攻' || verdict.stance === '试错'
-      ? 'border-red-800/60 bg-red-950/15'
-      : 'border-blue-800/60 bg-blue-950/15'
-  const stanceTone = verdict.stance === '防守' || verdict.stance === '收缩'
-    ? 'text-emerald-300 border-emerald-800 bg-emerald-950/40'
-    : verdict.stance === '进攻' || verdict.stance === '试错'
-      ? 'text-red-300 border-red-800 bg-red-950/40'
-      : 'text-blue-300 border-blue-800 bg-blue-950/40'
-  const percentileRows = [
-    ['上涨广度', percentiles.up_ratio],
-    ['跌停压力', percentiles.dt],
-    ['炸板风险', percentiles.broken_ratio],
-    ['成交活跃', percentiles.amount],
-  ] as const
 
   return (
-    <div className="space-y-4">
-      <section className={`rounded-lg border p-4 ${tone}`}>
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold text-gray-500">今日战场定性</span>
-              <span className={`rounded border px-2 py-0.5 text-xs font-bold ${stanceTone}`}>{verdict.stance || '待确认'}</span>
-              <span className="rounded border border-gray-700 bg-gray-900 px-2 py-0.5 text-[11px] text-gray-400">
-                {sourceLabel || '多维规则引擎'}
-              </span>
-            </div>
-            <h3 className="mt-2 text-xl font-bold text-white">{verdict.regime || '市场状态待确认'}</h3>
-            <p className="mt-2 text-sm leading-6 text-gray-300">{verdict.summary}</p>
-          </div>
-          <div className="shrink-0 text-right">
-            <div className="text-[11px] text-gray-500">次日仓位上限</div>
-            <div className="mt-1 font-mono text-3xl font-bold text-white">{verdict.position_cap ?? '--'}%</div>
-            <div className="mt-1 text-[11px] text-gray-500">判断置信度 {verdict.confidence ?? '--'}%</div>
-          </div>
-        </div>
-        {!!verdict.evidence?.length && (
-          <div className="mt-4 flex flex-wrap gap-2 border-t border-gray-800/80 pt-3">
-            {verdict.evidence.map((item, index) => (
-              <span key={index} className="rounded bg-gray-950/70 px-2.5 py-1 text-xs text-gray-300">{item}</span>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="overflow-hidden rounded-lg border border-gray-800 bg-gray-950/45">
-        <div className="border-b border-gray-800 px-4 py-3">
-          <div className="text-sm font-bold text-white">市场之下的暗流</div>
-          <div className="mt-0.5 text-xs text-gray-500">每条结论都拆成事实、推断和默认动作</div>
-        </div>
-        <div className="divide-y divide-gray-800">
-          {(intelligence.undercurrents || []).map((item, index) => (
-            <div key={`${item.title}-${index}`} className="px-4 py-4">
-              <div className="flex items-center gap-2">
-                <span className="rounded border border-blue-800/60 bg-blue-950/30 px-2 py-0.5 text-[11px] font-bold text-blue-300">{item.signal}</span>
-                <h4 className="text-sm font-bold text-white">{item.title}</h4>
-                <span className="ml-auto text-[11px] text-gray-600">置信度 {item.confidence}</span>
-              </div>
-              <div className="mt-2 grid grid-cols-[56px_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs leading-5">
-                <span className="text-gray-600">事实</span><span className="text-gray-400">{item.evidence}</span>
-                <span className="text-gray-600">推断</span><span className="text-gray-300">{item.inference}</span>
-                <span className="font-semibold text-blue-400">动作</span><span className="font-semibold text-blue-200">{item.action}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-gray-800 bg-gray-950/45 p-4">
-        <div className="flex items-center justify-between gap-3">
+    <div className="space-y-5">
+      <section className="overflow-hidden rounded-lg border border-blue-800/60 bg-gray-950/55">
+        <div className="flex items-center gap-3 border-b border-blue-900/60 bg-blue-950/20 px-5 py-3">
+          <Target size={18} className="text-blue-300" />
           <div>
-            <div className="text-sm font-bold text-white">历史坐标与盘中路径</div>
-            <div className="mt-0.5 text-xs text-gray-500">{history.window || '历史样本不足'} · 分位越高代表该指标在自身历史中越突出</div>
+            <div className="text-base font-bold text-white">01 今日最终结论</div>
+            <div className="text-xs text-gray-500">先给唯一判断，再说明为什么</div>
           </div>
-          <span className="text-xs text-gray-500">{path.snapshot_count ?? 0} 个快照</span>
+          <span className="ml-auto rounded border border-gray-700 bg-gray-950 px-2 py-1 text-[11px] text-gray-400">
+            {sourceLabel || '多维关系引擎'}
+          </span>
         </div>
-        <div className="mt-3 grid grid-cols-4 gap-2">
-          {percentileRows.map(([label, value]) => (
-            <div key={label} className="rounded border border-gray-800 bg-gray-900/70 px-3 py-2">
-              <div className="text-[11px] text-gray-500">{label}</div>
-              <div className="mt-1 font-mono text-lg font-bold text-white">{value == null ? '--' : `${value}分位`}</div>
+        <div className="p-5">
+          <div className="flex items-start justify-between gap-8">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className={'rounded border px-2.5 py-1 text-xs font-bold ' + stanceTone}>{final.stance || verdict.stance || '待确认'}</span>
+                <span className="text-xs text-gray-500">置信度 {verdict.confidence ?? '--'}%</span>
+              </div>
+              <h3 className="mt-3 text-2xl font-bold text-white">{final.headline || verdict.regime || '市场状态待确认'}</h3>
+              <div className="mt-4 space-y-3 text-sm leading-6">
+                <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-3">
+                  <span className="font-semibold text-gray-500">市场判断</span>
+                  <span className="font-semibold text-white">{final.market_judgement || verdict.summary}</span>
+                </div>
+                <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-3">
+                  <span className="font-semibold text-gray-500">赚钱效应</span>
+                  <span className="text-gray-300">{final.money_effect || '等待数据确认'}</span>
+                </div>
+                <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-3">
+                  <span className="font-semibold text-gray-500">明日仓位</span>
+                  <span className="font-semibold text-blue-200">{final.position_plan || ('总仓位上限 ' + (verdict.position_cap ?? '--') + '%')}</span>
+                </div>
+              </div>
             </div>
-          ))}
-        </div>
-        <div className="mt-3 rounded border border-gray-800 bg-gray-900/70 px-3 py-3">
-          <div className="flex items-center gap-2 text-sm">
-            <span className="font-bold text-blue-300">{path.available ? path.pattern : '路径不可用'}</span>
-            {path.available && <span className="text-gray-500">市场评分 {path.first_score} → {path.last_score} · 板块广度 {path.first_sector_breadth}% → {path.last_sector_breadth}%</span>}
+            <div className="w-32 shrink-0 border-l border-gray-800 pl-5 text-right">
+              <div className="text-[11px] text-gray-500">仓位硬上限</div>
+              <div className="mt-1 font-mono text-4xl font-bold text-white">{verdict.position_cap ?? '--'}%</div>
+              <div className="mt-1 text-xs text-gray-500">不是建议区间</div>
+            </div>
           </div>
-          <p className="mt-1 text-xs leading-5 text-gray-400">{path.summary}</p>
+          {!!final.logic?.length && (
+            <div className="mt-5 border-t border-gray-800 pt-4">
+              <div className="mb-2 text-xs font-bold text-blue-300">结论逻辑</div>
+              <div className="space-y-2 text-xs leading-5 text-gray-400">
+                {final.logic.map((item, index) => <p key={index}>{item}</p>)}
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
       <section className="overflow-hidden rounded-lg border border-gray-800 bg-gray-950/45">
-        <div className="border-b border-gray-800 px-4 py-3">
-          <div className="text-sm font-bold text-white">主线生命周期</div>
-          <div className="mt-0.5 text-xs text-gray-500">涨幅只是结果，收盘评分、广度、盘中持续率和龙头承接共同决定资格</div>
+        <div className="flex items-center gap-3 border-b border-gray-800 px-5 py-3">
+          <Activity size={18} className="text-blue-300" />
+          <div>
+            <div className="text-base font-bold text-white">02 四个核心判断</div>
+            <div className="text-xs text-gray-500">只保留真正决定操作的量价、赚钱效应、失败代价和轮动</div>
+          </div>
         </div>
         <div className="divide-y divide-gray-800">
-          {(intelligence.mainlines || []).slice(0, 8).map(row => (
-            <div key={row.name} className="grid grid-cols-[180px_110px_1fr_130px] items-center gap-3 px-4 py-3 text-xs">
-              <div>
-                <div className="font-semibold text-white">{row.name}</div>
-                <div className="mt-0.5 text-gray-600">龙头 {row.leader}</div>
+          {core.map((item, index) => (
+            <div key={item.key} className={'border-l-4 px-5 py-4 ' + judgementTone(item.tone)}>
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-xs text-gray-600">{String(index + 1).padStart(2, '0')}</span>
+                <h4 className="text-sm font-bold text-white">{item.title}</h4>
+                <span className={'ml-auto rounded border px-2 py-0.5 text-[11px] font-bold ' + judgementLabelTone(item.tone)}>
+                  {item.tone === 'attack' ? '支持参与' : item.tone === 'risk' ? '要求收缩' : '保持约束'}
+                </span>
               </div>
-              <div>
-                <div className={row.level === '确认主线' ? 'font-bold text-red-300' : row.level === '分歧降级' ? 'font-bold text-emerald-300' : 'font-bold text-blue-300'}>{row.level}</div>
-                <div className="mt-0.5 text-gray-600">{row.state}</div>
+              <p className="mt-2 text-base font-semibold leading-6 text-white">{item.conclusion}</p>
+              <p className="mt-2 text-sm leading-6 text-gray-400">{item.logic}</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {item.evidence.map((evidence, evidenceIndex) => (
+                  <span key={evidenceIndex} className="rounded border border-gray-800 bg-gray-900/80 px-2.5 py-1 text-xs text-gray-300">{evidence}</span>
+                ))}
               </div>
-              <div className="text-gray-400">评分 {row.score} · 广度 {row.breadth}% · 持续率 {row.persistence}% · 净流入推算 {row.net_in > 0 ? '+' : ''}{row.net_in.toFixed(2)}亿</div>
-              <div className="text-right font-semibold text-blue-200">{row.action}</div>
+              <div className="mt-3 grid grid-cols-[64px_minmax(0,1fr)] gap-3 text-sm leading-6">
+                <span className="font-bold text-blue-400">动作</span>
+                <span className="font-semibold text-blue-200">{item.action}</span>
+              </div>
+            </div>
+          ))}
+          {!core.length && <div className="px-5 py-6 text-sm text-gray-500">新版核心判断正在生成。</div>}
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-lg border border-gray-800 bg-gray-950/45">
+        <div className="flex items-center gap-3 border-b border-gray-800 px-5 py-3">
+          <Layers3 size={18} className="text-blue-300" />
+          <div>
+            <div className="text-base font-bold text-white">03 主线与轮动</div>
+            <div className="text-xs text-gray-500">相同行业链先归并，再判断强化、确认、分歧或退潮</div>
+          </div>
+        </div>
+        <div className="px-5 py-4">
+          <p className="text-sm font-semibold leading-6 text-white">{mainline.rotation_summary || '当前没有形成可验证的主线结构。'}</p>
+          {!!mainline.themes?.length && (
+            <div className="mt-4 divide-y divide-gray-800 border-y border-gray-800">
+              {mainline.themes.map(theme => (
+                <div key={theme.name} className="grid grid-cols-[180px_minmax(0,1fr)_360px] items-center gap-5 py-3 text-xs">
+                  <div>
+                    <div className="text-sm font-bold text-red-300">{theme.name}</div>
+                    <div className="mt-1 text-gray-600">龙头 {theme.leader}</div>
+                  </div>
+                  <div className="text-gray-400">内部方向：{theme.members.join('、')}</div>
+                  <div className="text-right text-gray-400">
+                    综合评分 {theme.score} · 广度 {theme.breadth}% · 持续率 {theme.persistence}% · 资金 {theme.net_in > 0 ? '+' : ''}{theme.net_in.toFixed(2)}亿
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="divide-y divide-gray-800 border-t border-gray-800">
+          {mainlineRows.slice(0, 6).map(row => (
+            <div key={row.name} className="px-5 py-4">
+              <div className="flex items-center gap-3">
+                <span className={row.level === '确认主线' ? 'rounded border border-red-900/70 bg-red-950/25 px-2 py-0.5 text-[11px] font-bold text-red-300' : row.level === '分歧降级' ? 'rounded border border-emerald-900/70 bg-emerald-950/25 px-2 py-0.5 text-[11px] font-bold text-emerald-300' : 'rounded border border-blue-900/70 bg-blue-950/25 px-2 py-0.5 text-[11px] font-bold text-blue-300'}>
+                  {row.stage || row.level}
+                </span>
+                <h4 className="text-sm font-bold text-white">{row.name}</h4>
+                <span className="text-xs text-gray-600">龙头 {row.leader}</span>
+                <span className="ml-auto text-xs font-semibold text-blue-200">{row.judgement || row.action}</span>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-gray-400">{row.logic || row.evidence}</p>
+              <p className="mt-2 text-xs leading-5 text-emerald-300"><span className="text-gray-600">失效条件：</span>{row.invalidation}</p>
             </div>
           ))}
         </div>
       </section>
 
-      <section className="rounded-lg border border-gray-800 bg-gray-950/45 p-4">
-        <div className="text-sm font-bold text-white">当日判断审计（盘中 → 收盘）</div>
-        <p className="mt-2 text-sm leading-6 text-gray-300">{audit.ready ? audit.verdict : audit.verdict || '盘中判断样本不足，本日不做命中率评价。'}</p>
-        {audit.market?.summary && <p className="mt-1 text-xs leading-5 text-gray-500">{audit.market.summary}</p>}
-        {!!audit.lessons?.length && <p className="mt-2 text-xs leading-5 text-blue-300">修正：{audit.lessons.join(' ')}</p>}
+      <section className="overflow-hidden rounded-lg border border-blue-800/60 bg-blue-950/10">
+        <div className="flex items-center gap-3 border-b border-blue-900/60 px-5 py-3">
+          <Crosshair size={18} className="text-blue-300" />
+          <div>
+            <div className="text-base font-bold text-white">04 明日唯一执行方案</div>
+            <div className="text-xs text-gray-500">默认动作固定，只有满足明确条件才升级或降级</div>
+          </div>
+          <span className="ml-auto rounded border border-blue-800 bg-gray-950/60 px-3 py-1 text-xs font-bold text-blue-300">
+            {plan.default_action || '待确认'} · 上限 {plan.position_cap ?? '--'}%
+          </span>
+        </div>
+        <div className="p-5">
+          <p className="text-lg font-bold leading-7 text-white">{plan.base_case}</p>
+          <p className="mt-2 text-sm leading-6 text-gray-400">{plan.rationale}</p>
+          <div className="mt-4 divide-y divide-gray-800 border-y border-gray-800 text-sm leading-6">
+            <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-3 py-3">
+              <span className="font-bold text-red-300">允许做</span><span className="text-gray-300">{plan.allowed}</span>
+            </div>
+            <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-3 py-3">
+              <span className="font-bold text-emerald-300">禁止做</span><span className="text-gray-300">{plan.forbidden}</span>
+            </div>
+            <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-3 py-3">
+              <span className="font-bold text-blue-300">执行顺序</span><span className="text-gray-300">{plan.execution}</span>
+            </div>
+            <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-3 py-3">
+              <span className="font-bold text-blue-300">升级条件</span><span className="text-gray-300">{plan.upgrade_condition}</span>
+            </div>
+            <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-3 py-3">
+              <span className="font-bold text-emerald-300">降级条件</span><span className="text-gray-300">{plan.downgrade_condition}</span>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="overflow-hidden rounded-lg border border-gray-800 bg-gray-950/45">
-        <div className="border-b border-gray-800 px-4 py-3">
-          <div className="text-sm font-bold text-white">昨日判断复核</div>
-          <div className="mt-0.5 text-xs text-gray-500">先判对错，再决定保持还是修正</div>
+        <div className="flex items-center gap-3 border-b border-gray-800 px-5 py-3">
+          <History size={18} className="text-blue-300" />
+          <div>
+            <div className="text-base font-bold text-white">05 昨日判断审计</div>
+            <div className="text-xs text-gray-500">判断对就保持，判断错就指出错误并修正规则</div>
+          </div>
         </div>
-
         {yesterdayAudit ? (
-          <div className="p-4">
+          <div className="p-5">
             <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <span className={`rounded-lg border px-4 py-2 text-lg font-bold ${auditResultTone}`}>
-                  昨日判断：{yesterdayAudit.judgement || '待复核'}
-                </span>
-                <span className={`rounded border px-2 py-1 text-[10px] ${yesterdayAudit.sample_source === 'historical_replay' ? 'border-amber-800/60 bg-amber-950/30 text-amber-300' : 'border-indigo-800/60 bg-indigo-950/30 text-indigo-300'}`}>
-                  {yesterdayAudit.sample_source_label || '上线后前瞻'}
-                </span>
-              </div>
+              <span className={'rounded border px-4 py-2 text-lg font-bold ' + auditResultTone}>昨日判断：{yesterdayAudit.judgement || '待复核'}</span>
               <span className="text-xs text-gray-600">{yesterdayAudit.decision_date} → {yesterdayAudit.outcome_date}</span>
             </div>
-
-            <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-              <div className="rounded-lg border border-gray-800 bg-gray-900/65 p-3">
-                <div className="text-[11px] text-gray-500">昨天的判断</div>
+            <div className="mt-4 grid grid-cols-3 gap-4 border-y border-gray-800 py-4 text-sm">
+              <div>
+                <div className="text-[11px] text-gray-500">昨天判断</div>
                 <div className="mt-1 font-bold text-white">{yesterdayAudit.prior_stance} · 仓位上限 {yesterdayAudit.prior_position_cap}%</div>
               </div>
-              <div className="rounded-lg border border-gray-800 bg-gray-900/65 p-3">
-                <div className="text-[11px] text-gray-500">今天的结果</div>
+              <div>
+                <div className="text-[11px] text-gray-500">今天结果</div>
                 <div className="mt-1 font-bold text-white">{yesterdayAudit.actual_regime}（{yesterdayAudit.actual_stance}）</div>
               </div>
-              <div className="rounded-lg border border-gray-800 bg-gray-900/65 p-3">
+              <div>
                 <div className="text-[11px] text-gray-500">系统处理</div>
                 <div className="mt-1 font-bold leading-5 text-blue-200">{yesterdayAudit.learning_action}</div>
               </div>
             </div>
-
-            <div className="mt-3 grid grid-cols-2 gap-3 text-xs leading-5">
-              <div className="rounded-lg border border-red-900/40 bg-red-950/10 p-3">
-                <div className="mb-1.5 font-bold text-red-300">保持什么</div>
+            <div className="mt-4 grid grid-cols-2 gap-6 text-sm leading-6">
+              <div>
+                <div className="mb-2 font-bold text-red-300">保持什么</div>
                 {(yesterdayAudit.keep_points?.length ? yesterdayAudit.keep_points : ['本次没有需要保留的有效判断。']).map((item, index) => (
-                  <div key={index} className="text-gray-300">· {item}</div>
+                  <p key={index} className="text-gray-300">· {item}</p>
                 ))}
               </div>
-              <div className={`rounded-lg border p-3 ${yesterdayAudit.wrong_points?.length ? 'border-emerald-900/40 bg-emerald-950/10' : 'border-gray-800 bg-gray-900/40'}`}>
-                <div className={`mb-1.5 font-bold ${yesterdayAudit.wrong_points?.length ? 'text-emerald-300' : 'text-gray-400'}`}>
+              <div>
+                <div className={yesterdayAudit.wrong_points?.length ? 'mb-2 font-bold text-emerald-300' : 'mb-2 font-bold text-gray-400'}>
                   {yesterdayAudit.wrong_points?.length ? '错在哪里，怎么改' : '是否需要修正'}
                 </div>
                 {yesterdayAudit.wrong_points?.length ? yesterdayAudit.wrong_points.map((item, index) => (
-                  <div key={index} className="mb-1 text-gray-300">· {item}<span className="text-blue-300"> 改进：{yesterdayAudit.improvements?.[index]}</span></div>
-                )) : <div className="text-gray-400">无。本次方向和风险预算匹配，不为了学习而强行改规则。</div>}
+                  <p key={index} className="mb-1 text-gray-300">· {item}<span className="text-blue-300"> 改进：{yesterdayAudit.improvements?.[index]}</span></p>
+                )) : <p className="text-gray-400">无。本次方向和风险预算匹配，不为了学习而强行改规则。</p>}
               </div>
             </div>
           </div>
-        ) : (
-          <div className="px-4 py-5 text-sm text-gray-500">尚无可对齐的相邻交易日样本。</div>
-        )}
+        ) : <div className="px-5 py-6 text-sm text-gray-500">尚无可对齐的相邻交易日样本。</div>}
 
         <details className="border-t border-gray-800">
-          <summary className="cursor-pointer select-none px-4 py-3 text-xs font-semibold text-gray-500 hover:text-gray-300">
-            查看学习依据 · 已审计 {learning.valid_outcomes ?? 0} 次 · 当前版本 {learning.effective_version || 'L0'}
+          <summary className="cursor-pointer select-none px-5 py-3 text-xs font-semibold text-gray-500 hover:text-gray-300">
+            查看历史坐标、盘中审计与学习依据
           </summary>
-          <div className="border-t border-gray-800 px-4 py-4">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-gray-400">有效结果 {learning.valid_outcomes ?? 0} / {learning.minimum_samples ?? 30}</span>
-              <span className="text-gray-600">历史回放 {learning.historical_outcomes ?? 0} · 上线后前瞻 {learning.live_outcomes ?? 0} / {learning.minimum_live_samples ?? 5}</span>
+          <div className="space-y-4 border-t border-gray-800 px-5 py-4 text-xs leading-5">
+            <div>
+              <div className="font-bold text-gray-300">历史坐标</div>
+              <p className="mt-1 text-gray-500">{history.window || '历史样本不足'} · 成交相对5日均额 {history.amount_ratio_5 == null ? '--' : history.amount_ratio_5.toFixed(2) + '倍'}</p>
             </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded bg-gray-900">
-              <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, Math.max(0, learning.progress_pct ?? 0))}%` }} />
+            <div>
+              <div className="font-bold text-gray-300">盘中到收盘</div>
+              <p className="mt-1 text-gray-500">{path.summary || '盘中快照不足'} {path.available ? '市场评分 ' + path.first_score + '→' + path.last_score + '，板块广度 ' + path.first_sector_breadth + '%→' + path.last_sector_breadth + '%。' : ''}</p>
             </div>
-            <p className="mt-2 text-xs text-gray-500">{learning.next_action}</p>
-
+            <div>
+              <div className="font-bold text-gray-300">当日盘中判断审计</div>
+              <p className="mt-1 text-gray-500">{audit.verdict || '盘中判断样本不足，本日不做命中率评价。'}</p>
+            </div>
+            <div>
+              <div className="font-bold text-gray-300">自动学习</div>
+              <p className="mt-1 text-gray-500">有效结果 {learning.valid_outcomes ?? 0} / {learning.minimum_samples ?? 30} · 历史回放 {learning.historical_outcomes ?? 0} · 上线后前瞻 {learning.live_outcomes ?? 0} / {learning.minimum_live_samples ?? 5}</p>
+              <div className="mt-2 h-1.5 overflow-hidden rounded bg-gray-900">
+                <div className="h-full bg-indigo-500" style={{ width: String(Math.min(100, Math.max(0, learning.progress_pct ?? 0))) + '%' }} />
+              </div>
+              <p className="mt-2 text-gray-600">{learning.next_action}</p>
+            </div>
             {!!learning.effective_weights?.length && (
-              <div className="mt-4 grid grid-cols-3 gap-x-5 gap-y-2 text-xs">
+              <div className="grid grid-cols-3 gap-x-5 gap-y-2">
                 {learning.effective_weights.map(item => (
                   <div key={item.key} className="flex items-center justify-between border-b border-gray-800/70 py-1.5">
-                    <div>
-                      <div className="text-gray-400">{item.label}</div>
-                      {factorLearning.get(item.key)?.next_day_risk_rate != null && (
-                        <div className="mt-0.5 text-[10px] text-gray-600">{factorLearning.get(item.key)?.sample_count}次触发 · 次日风险率 {factorLearning.get(item.key)?.next_day_risk_rate}%</div>
-                      )}
-                    </div>
+                    <span className="text-gray-500">{item.label}{factorLearning.get(item.key)?.next_day_risk_rate != null ? ' · 风险率' + factorLearning.get(item.key)?.next_day_risk_rate + '%' : ''}</span>
                     <span className="font-mono font-bold text-indigo-300">{item.weight.toFixed(2)}</span>
                   </div>
                 ))}
               </div>
             )}
-
-            {learningAttempt && (
-              <div className="mt-3 text-xs text-gray-500">{learningAttempt.status === 'promoted' ? '候选权重已通过验证' : '候选权重已拒绝，继续使用旧版本'} · {learningAttempt.version}</div>
-            )}
-            {!!learning.guardrails?.length && <div className="mt-3 text-[11px] leading-5 text-gray-600">保护边界：{learning.guardrails.join(' ')}</div>}
+            {learningAttempt && <p className="text-gray-600">{learningAttempt.status === 'promoted' ? '候选权重已通过验证' : '候选权重未通过验证，继续使用旧版本'} · {learningAttempt.version}</p>}
           </div>
         </details>
-      </section>
-
-      <section className="rounded-lg border border-blue-800/60 bg-blue-950/15 p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-sm font-bold text-blue-200">明日唯一执行方案</div>
-          <span className="rounded border border-blue-800 bg-gray-950/50 px-2 py-1 text-xs font-bold text-blue-300">{plan.default_action} · 上限 {plan.position_cap}%</span>
-        </div>
-        <p className="mt-3 text-sm font-semibold leading-6 text-white">{plan.base_case}</p>
-        <div className="mt-3 space-y-2 text-xs leading-5">
-          <div className="rounded bg-gray-950/70 px-3 py-2 text-gray-300"><span className="text-red-300">主看：</span>{plan.focus?.join('、') || '没有通过验证的进攻方向'}</div>
-          <div className="rounded bg-gray-950/70 px-3 py-2 text-gray-300"><span className="text-blue-300">升级：</span>{plan.upgrade_condition}</div>
-          <div className="rounded bg-gray-950/70 px-3 py-2 text-gray-300"><span className="text-emerald-300">降级：</span>{plan.downgrade_condition}</div>
-        </div>
       </section>
     </div>
   )
 }
+
 
 function MarketReviewBlock({ market, analysis, intelligence, analysisSource, rankTab, setRankTab }: {
   market?: MarketData
@@ -1185,41 +1272,39 @@ function MarketReviewBlock({ market, analysis, intelligence, analysisSource, ran
   const sectors = market.sectors || {}
   const insights = buildMarketInsights(market)
   return (
-    <ReviewSection index="01" title="市场复盘" aside="战场定性、市场暗流、主线生命周期与明日方案" defaultOpen>
+    <ReviewSection index="01" title="市场复盘" aside="最终结论、四个核心判断、主线轮动与明日方案" defaultOpen>
       <div className="space-y-4">
         {intelligence
           ? <PostmarketIntelligencePanel intelligence={intelligence} sourceLabel={analysisSource} />
           : <MarketInsightGrid insights={insights} />}
-        {intelligence
-          ? <DetailBox title="AI 完整论证（展开查看）"><AnalysisMarkdown text={analysis} title="市场逻辑判断" /></DetailBox>
-          : <AnalysisMarkdown text={analysis} title="市场逻辑判断" />}
-        {market.summary && <p className="px-1 text-sm leading-relaxed text-gray-400">{market.summary}</p>}
+        <DetailBox title="查看原始行情、榜单与 AI 完整论证">
+          <AnalysisMarkdown text={analysis} title="市场逻辑判断" />
+          {market.summary && <p className="px-1 text-sm leading-relaxed text-gray-400">{market.summary}</p>}
 
-        <div className="space-y-4">
-          <SentimentGauge s={market.sentiment} />
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <Metric label="涨停" value={ls.zt_count ?? 0} tone="red" />
-            <Metric label="跌停" value={ls.dt_count ?? 0} tone="green" />
-            <Metric label="两市成交" value={`${Math.round(market.amount?.total_yi ?? 0)}亿`} />
-            <Metric label="上涨" value={breadth.up ?? 0} tone="red" />
-            <Metric label="下跌" value={breadth.down ?? 0} tone="green" />
-            <Metric label="炸板" value={`${ls.broken_count ?? 0}只`} />
+          <div className="space-y-4">
+            <SentimentGauge s={market.sentiment} />
+            <div className="grid grid-cols-3 gap-2">
+              <Metric label="涨停" value={ls.zt_count ?? 0} tone="red" />
+              <Metric label="跌停" value={ls.dt_count ?? 0} tone="green" />
+              <Metric label="两市成交" value={`${Math.round(market.amount?.total_yi ?? 0)}亿`} />
+              <Metric label="上涨" value={breadth.up ?? 0} tone="red" />
+              <Metric label="下跌" value={breadth.down ?? 0} tone="green" />
+              <Metric label="炸板" value={`${ls.broken_count ?? 0}只`} />
+            </div>
           </div>
-        </div>
 
-        {!!market.indices?.length && (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {market.indices.map(idx => (
-              <div key={idx.key || idx.name} className="rounded-lg border border-gray-800 bg-gray-950/50 px-3 py-2">
-                <div className="text-[11px] text-gray-500">{idx.name}</div>
-                <div className={`font-mono text-lg font-bold ${marketPctColor(idx.pct)}`}>{idx.price?.toFixed?.(2) ?? '--'}</div>
-                <div className={`font-mono text-xs ${marketPctColor(idx.pct)}`}>{fmtPct(idx.pct)}</div>
-              </div>
-            ))}
-          </div>
-        )}
+          {!!market.indices?.length && (
+            <div className="grid grid-cols-4 gap-2">
+              {market.indices.map(idx => (
+                <div key={idx.key || idx.name} className="rounded-lg border border-gray-800 bg-gray-950/50 px-3 py-2">
+                  <div className="text-[11px] text-gray-500">{idx.name}</div>
+                  <div className={`font-mono text-lg font-bold ${marketPctColor(idx.pct)}`}>{idx.price?.toFixed?.(2) ?? '--'}</div>
+                  <div className={`font-mono text-xs ${marketPctColor(idx.pct)}`}>{fmtPct(idx.pct)}</div>
+                </div>
+              ))}
+            </div>
+          )}
 
-        <DetailBox title="市场数据拆解（涨跌分布 / 连板 / 榜单 / 要闻）">
           {market.ai_review && (
             <div className="rounded-lg border border-gray-800 bg-gray-950/45 p-3">
               <div className="mb-2 text-xs font-semibold text-indigo-300">AI 智能复盘点评</div>

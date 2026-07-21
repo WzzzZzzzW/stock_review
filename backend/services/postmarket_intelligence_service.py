@@ -47,6 +47,23 @@ def _market_metrics(market: dict) -> dict:
     cap_map = {str(row.get("tier") or ""): row for row in cap_perf}
     mega = next((row for name, row in cap_map.items() if "超大盘" in name), {})
     small = next((row for name, row in cap_map.items() if "小盘 <" in name), {})
+    cap_total = sum(int(_f(row.get("count"))) for row in cap_perf)
+    equal_weight_avg = (
+        sum(_f(row.get("avg_pct")) * int(_f(row.get("count"))) for row in cap_perf) / cap_total
+        if cap_total else index_avg
+    )
+    close_positions = []
+    for row in indices:
+        high, low, price = _f(row.get("high")), _f(row.get("low")), _f(row.get("price"))
+        if high > low:
+            close_positions.append((price - low) / (high - low) * 100)
+    close_position = sum(close_positions) / len(close_positions) if close_positions else 50.0
+    amount = round(_f((market.get("amount") or {}).get("total_yi")), 2)
+    top_amount = sum(_f(row.get("amount_yi")) for row in (market.get("rankings") or {}).get("amount") or [])
+    top_amount_share = top_amount / amount * 100 if amount else 0.0
+    up_over5 = int(_f(breadth.get("up_over5")))
+    down_over5 = int(_f(breadth.get("down_over5")))
+    tail_ratio = up_over5 / max(down_over5, 1)
     return {
         "up": int(up),
         "down": int(down),
@@ -55,9 +72,17 @@ def _market_metrics(market: dict) -> dict:
         "dt": int(_f(limits.get("dt_count"))),
         "broken": int(_f(limits.get("broken_count"))),
         "broken_ratio": round(_f(limits.get("broken_ratio")), 1),
-        "amount": round(_f((market.get("amount") or {}).get("total_yi")), 2),
+        "max_continuity": int(_f(limits.get("max_continuity"))),
+        "up_over5": up_over5,
+        "down_over5": down_over5,
+        "tail_ratio": round(tail_ratio, 2),
+        "amount": amount,
+        "top_amount_share": round(top_amount_share, 1),
         "sentiment": int(_f((market.get("sentiment") or {}).get("score"))),
         "index_avg": round(index_avg, 2),
+        "equal_weight_avg": round(equal_weight_avg, 2),
+        "index_equal_gap": round(index_avg - equal_weight_avg, 2),
+        "close_position": round(close_position, 1),
         "index_dispersion": round(index_dispersion, 2),
         "mega_pct": round(_f(mega.get("avg_pct")), 2),
         "small_pct": round(_f(small.get("avg_pct")), 2),
@@ -81,7 +106,10 @@ def _history_context(trade_date: str, current: dict, limit: int = 20) -> dict:
 
     previous = next((row for row in rows if row["date"] < trade_date), None)
     sample = rows or [{"date": trade_date, **current}]
-    fields = ("up_ratio", "zt", "dt", "broken_ratio", "amount", "sentiment", "size_gap")
+    fields = (
+        "up_ratio", "zt", "dt", "broken_ratio", "amount", "sentiment", "size_gap",
+        "equal_weight_avg", "index_equal_gap", "close_position", "tail_ratio",
+    )
     percentiles = {
         field: _percentile(_f(current.get(field)), [_f(row.get(field)) for row in sample])
         for field in fields
@@ -94,6 +122,14 @@ def _history_context(trade_date: str, current: dict, limit: int = 20) -> dict:
     if previous:
         for field in fields:
             changes[field] = round(_f(current.get(field)) - _f(previous.get(field)), 2)
+    prior_rows = [row for row in rows if row["date"] < trade_date]
+
+    def _average(field: str, count: int) -> float | None:
+        values = [_f(row.get(field)) for row in prior_rows[:count] if _f(row.get(field)) > 0]
+        return round(sum(values) / len(values), 2) if values else None
+
+    amount_avg_5 = _average("amount", 5)
+    amount_avg_20 = _average("amount", 20)
     return {
         "sample_days": len(sample),
         "window": f"最近{len(sample)}个已保存交易日",
@@ -101,6 +137,10 @@ def _history_context(trade_date: str, current: dict, limit: int = 20) -> dict:
         "medians": medians,
         "previous_date": previous.get("date") if previous else "",
         "changes_vs_previous": changes,
+        "amount_avg_5": amount_avg_5,
+        "amount_avg_20": amount_avg_20,
+        "amount_ratio_5": round(_f(current.get("amount")) / amount_avg_5, 2) if amount_avg_5 else None,
+        "amount_ratio_20": round(_f(current.get("amount")) / amount_avg_20, 2) if amount_avg_20 else None,
     }
 
 
@@ -379,22 +419,288 @@ def _undercurrents(metrics: dict, history: dict, path: dict, mainlines: list[dic
     return items[:6]
 
 
-def _tomorrow_plan(verdict: dict, metrics: dict, history: dict, mainlines: list[dict]) -> dict:
-    confirmed = [row["name"] for row in mainlines if row.get("level") == "确认主线"]
+def _core_judgements(
+    metrics: dict,
+    history: dict,
+    path: dict,
+    mainlines: list[dict],
+    mainline_analysis: dict | None = None,
+) -> list[dict]:
+    amount_ratio = history.get("amount_ratio_5")
+    volume_text = f"相对5日均额{_f(amount_ratio):.2f}倍" if amount_ratio else "5日均额样本不足"
+    price_up = metrics["index_avg"] > 0
+    equal_up = metrics["equal_weight_avg"] > 0
+    close_strong = metrics["close_position"] >= 70
+
+    if price_up and equal_up and _f(amount_ratio, 1) >= 1.1 and close_strong:
+        volume_conclusion = "放量上攻并由收盘确认，新增成交有效。"
+        volume_action = "允许按主线强度提高参与度，但不追单只高开。"
+        volume_tone = "attack"
+    elif price_up and metrics["index_equal_gap"] >= 1.5:
+        volume_conclusion = "指数上涨但资金集中在权重，量能尚未转化为普遍机会。"
+        volume_action = "只保留有独立承接的核心，不向后排扩散。"
+        volume_tone = "risk"
+    elif price_up and _f(amount_ratio, 1) < 0.9:
+        volume_conclusion = "缩量上涨，价格走强但增量确认不足。"
+        volume_action = "不提高总仓位，等放量承接后再升级。"
+        volume_tone = "neutral"
+    elif not price_up and _f(amount_ratio, 1) >= 1.1:
+        volume_conclusion = "放量下跌，筹码交换偏向主动撤退。"
+        volume_action = "直接收缩仓位，不把高成交当成进攻理由。"
+        volume_tone = "risk"
+    else:
+        volume_conclusion = "量价关系处于中性，成交尚未给出足以改写仓位的信号。"
+        volume_action = "延续当前仓位纪律，等价格、广度和收盘位置同向。"
+        volume_tone = "neutral"
+
+    volume_logic = (
+        f"两市成交{metrics['amount']:.0f}亿，{volume_text}；主要指数平均{_pct(metrics['index_avg'])}，"
+        f"全市场个股平均{_pct(metrics['equal_weight_avg'])}，指数收在日内区间的{metrics['close_position']:.0f}%位置。"
+        "量能只有与价格方向、收盘位置和等权表现同向，才被认定为有效增量。"
+    )
+
+    tail_ratio = metrics["tail_ratio"]
+    if metrics["up_ratio"] >= 60 and metrics["equal_weight_avg"] > 0 and metrics["size_gap"] <= 1.5:
+        earning_conclusion = "赚钱效应已从指数向多数个股扩散。"
+        earning_action = "允许在确认主线中从龙头向前排扩展，仍不做后排。"
+        earning_tone = "attack"
+    elif metrics["up_ratio"] >= 50 and metrics["equal_weight_avg"] > 0:
+        earning_conclusion = "赚钱效应在修复，但弹性仍偏向部分风格。"
+        earning_action = "可试错主线前排，不将局部强势外推为全面加仓。"
+        earning_tone = "neutral"
+    elif metrics["index_avg"] > 0 and (metrics["equal_weight_avg"] <= 0 or metrics["size_gap"] >= 2):
+        earning_conclusion = "指数表面强于真实持股体验，属于权重支撑。"
+        earning_action = "小盘和后排退出主计划，仓位按个股承接而非指数红绿决定。"
+        earning_tone = "risk"
+    else:
+        earning_conclusion = "亏钱效应占优，市场参与度不足。"
+        earning_action = "停止向后排扩散，优先处理风险。"
+        earning_tone = "risk"
+    earning_logic = (
+        f"上涨家数占比{metrics['up_ratio']:.1f}%，但更关键的等权平均为{_pct(metrics['equal_weight_avg'])}；"
+        f"超大盘与小盘差{metrics['size_gap']:+.2f}个百分点，涨超5%与跌超5%的强弱尾部比为{tail_ratio:.2f}。"
+        "这些关系用来区分指数红盘、权重护盘和真正的普遍赚钱效应。"
+    )
+
+    loss_ratio = metrics["dt"] / max(metrics["zt"], 1)
+    if metrics["broken_ratio"] <= 20 and loss_ratio <= 0.5 and tail_ratio >= 2:
+        short_conclusion = "短线成功样本占优，失败代价处于可控区间。"
+        short_action = "允许做确认主线的龙头与首次分歧，不扩散到杂毛。"
+        short_tone = "attack"
+    elif metrics["broken_ratio"] >= 35 or loss_ratio >= 1:
+        short_conclusion = "失败样本代价过高，短线接力是负期望分布。"
+        short_action = "停止接力和弱转强博弈，只保留低位承接。"
+        short_tone = "risk"
+    else:
+        short_conclusion = "短线生态修复但尚未达到无约束追高的程度。"
+        short_action = "只做成功率最高的主线前排，追高仓位继续受限。"
+        short_tone = "neutral"
+    short_logic = (
+        f"炸板率{metrics['broken_ratio']:.1f}%，跌停/涨停比{loss_ratio:.2f}，强势尾部/弱势尾部比{tail_ratio:.2f}，"
+        f"最高连板{metrics['max_continuity']}板。这里同时比较成功样本、失败样本和高度承接，"
+        "不会用单独的涨停数量代替短线生态判断。"
+    )
+
+    confirmed = [row for row in mainlines if row.get("level") == "确认主线"]
+    risk_lines = [row for row in mainlines if row.get("level") == "分歧降级"]
+    confirmed_themes = (
+        _confirmed_themes(mainline_analysis)
+        if mainline_analysis else
+        list(dict.fromkeys(_theme_for_sector(str(row.get("name") or "")) for row in confirmed))[:3]
+    )
+    names = "、".join(confirmed_themes[:4])
+    if len(confirmed) >= 2 and path.get("available") and _f(path.get("breadth_delta")) >= 10:
+        rotation_conclusion = f"主线从盘中到收盘继续扩散，确认方向为{names}。"
+        rotation_action = "明日优先检查原主线分歧承接，不去猜新题材。"
+        rotation_tone = "attack"
+    elif confirmed:
+        rotation_conclusion = f"局部主线已确认，但市场仍以结构性轮动为主：{names}。"
+        rotation_action = "只跟踪确认主线龙头，禁止由局部强势外推到全面加仓。"
+        rotation_tone = "neutral"
+    else:
+        rotation_conclusion = "没有方向同时通过资金、广度、龙头和持续性验证。"
+        rotation_action = "主线保持为空，不用涨幅榜强行选方向。"
+        rotation_tone = "risk"
+    rotation_logic = (
+        f"收盘共{len(confirmed)}个强势行业，系统仅选{len(confirmed_themes)}条产业线进入明日主计划；"
+        f"{len(risk_lines)}个方向因资金撤退或高位分歧降级。"
+        + (
+            f"盘中板块广度{path.get('first_sector_breadth')}%→{path.get('last_sector_breadth')}%，"
+            f"市场评分{path.get('first_score')}→{path.get('last_score')}。"
+            if path.get("available") else "盘中快照不足，不追加日内持续性结论。"
+        )
+        + "主线资格由板块评分、广度、资金、龙头和盘中持续率共同决定。"
+    )
+
+    return [
+        {"key": "volume_price", "title": "量价与资金效率", "conclusion": volume_conclusion, "logic": volume_logic,
+         "evidence": [volume_text, f"指数/等权差{metrics['index_equal_gap']:+.2f}个百分点", f"收盘位置{metrics['close_position']:.0f}%"], "action": volume_action, "tone": volume_tone},
+        {"key": "earning_effect", "title": "真实赚钱效应", "conclusion": earning_conclusion, "logic": earning_logic,
+         "evidence": [f"等权平均{_pct(metrics['equal_weight_avg'])}", f"市值风格差{metrics['size_gap']:+.2f}点", f"强弱尾部比{tail_ratio:.2f}"], "action": earning_action, "tone": earning_tone},
+        {"key": "short_ecology", "title": "短线生态与失败代价", "conclusion": short_conclusion, "logic": short_logic,
+         "evidence": [f"炸板率{metrics['broken_ratio']:.1f}%", f"跌停/涨停比{loss_ratio:.2f}", f"最高{metrics['max_continuity']}板"], "action": short_action, "tone": short_tone},
+        {"key": "rotation", "title": "主线轮动与持续性", "conclusion": rotation_conclusion, "logic": rotation_logic,
+         "evidence": [f"产业主线{len(confirmed_themes)}条", f"行业确认{len(confirmed)}个", path.get("pattern") or "盘中路径不足"], "action": rotation_action, "tone": rotation_tone},
+    ]
+
+
+def _theme_for_sector(name: str) -> str:
+    groups = (
+        ("电子产业链", ("半导体", "元件", "其他电子", "电子化学品", "消费电子", "光学光电子", "通信设备")),
+        ("新能源产业链", ("电池", "光伏", "风电", "储能", "电网设备", "充电桩")),
+        ("贵金属", ("贵金属", "黄金")),
+        ("大消费", ("白酒", "食品加工", "旅游", "酒店", "零售", "美容护理")),
+        ("医药生物", ("医药", "中药", "化学制药", "医疗服务", "医疗器械")),
+        ("周期资源", ("煤炭", "油气", "钢铁", "有色", "化学原料", "化学纤维")),
+        ("大金融", ("银行", "证券", "保险", "多元金融")),
+    )
+    for theme, keywords in groups:
+        if any(keyword in name for keyword in keywords):
+            return theme
+    return name
+
+
+def _confirmed_themes(mainline_analysis: dict) -> list[str]:
+    return [str(row.get("name")) for row in mainline_analysis.get("themes") or [] if row.get("name")]
+
+
+def _final_conclusion(verdict: dict, core: list[dict], mainline_analysis: dict) -> dict:
+    stance = verdict.get("stance") or "等待确认"
+    cap = int(_f(verdict.get("position_cap"), 20))
+    confirmed = _confirmed_themes(mainline_analysis)
+    if stance in {"进攻", "试错"}:
+        market_judgement = "可以参与，但只做资金、广度和龙头承接共同确认的主线，不追后排。"
+    elif stance in {"防守", "收缩"}:
+        market_judgement = "不主动扩大风险，只保留强于市场且有独立承接的核心。"
+    else:
+        market_judgement = "保持中等以下仓位，等量价、广度和主线持续性同时确认。"
+    focus_text = "、".join(str(name) for name in confirmed[:4] if name) or "暂无通过验证的进攻方向"
+    return {
+        "headline": verdict.get("regime") or "市场状态待确认",
+        "stance": stance,
+        "market_judgement": market_judgement,
+        "money_effect": core[1]["conclusion"],
+        "position_plan": f"明日总仓位上限{cap}%，主看{focus_text}。",
+        "logic": [core[0]["logic"], core[1]["logic"], f"{core[2]['logic']}{core[3]['logic']}"],
+    }
+
+
+def _mainline_analysis(mainlines: list[dict], market: dict) -> dict:
+    rows = []
+    for row in mainlines:
+        level = row.get("level")
+        persistence = int(_f(row.get("persistence")))
+        if level == "确认主线" and persistence >= 75:
+            stage = "强化"
+        elif level == "确认主线":
+            stage = "确认"
+        elif level == "轮动候选":
+            stage = "启动观察"
+        elif level == "分歧降级":
+            stage = "分歧/退潮"
+        else:
+            stage = "强度不足"
+        if level == "确认主线":
+            logic = (
+                f"{row.get('name')}的强势不是由单只股票拉动：收盘评分{row.get('score')}，"
+                f"板块广度{row.get('breadth')}%，盘中前十持续率{persistence}%，"
+                f"净流入推算{_f(row.get('net_in')):+.2f}亿，龙头{row.get('leader')}。"
+                "价格、资金、内部扩散和龙头承接同向，因此保留主线资格。"
+            )
+        elif level == "分歧降级":
+            logic = (
+                f"{row.get('name')}虽然仍有局部强势，但状态已转为{row.get('state')}，"
+                f"广度{row.get('breadth')}%、持续率{persistence}%与资金方向不再同步，不能继续当作主线。"
+            )
+        else:
+            logic = (
+                f"{row.get('name')}当前评分{row.get('score')}、广度{row.get('breadth')}%、持续率{persistence}%，"
+                "尚未同时通过资金、扩散和龙头承接验证，只作为轮动线索。"
+            )
+        rows.append({
+            **row,
+            "stage": stage,
+            "logic": logic,
+            "judgement": row.get("action"),
+            "invalidation": (
+                "明日若板块广度降到55%以下、龙头失去承接或放量滞涨，直接取消主线资格。"
+                if level == "确认主线" else
+                "只有广度、资金和龙头承接同时改善，才能升级。"
+            ),
+        })
+
+    confirmed_rows = [row for row in rows if row.get("level") == "确认主线"]
+    theme_map: dict[str, list[dict]] = {}
+    for row in confirmed_rows:
+        theme_map.setdefault(_theme_for_sector(str(row.get("name") or "")), []).append(row)
+    themes = []
+    for theme, members in theme_map.items():
+        members.sort(key=lambda item: (_f(item.get("score")), _f(item.get("persistence"))), reverse=True)
+        themes.append({
+            "name": theme,
+            "members": [str(item.get("name")) for item in members],
+            "leader": members[0].get("leader") or "--",
+            "score": round(sum(_f(item.get("score")) for item in members) / len(members)),
+            "breadth": round(sum(_f(item.get("breadth")) for item in members) / len(members)),
+            "persistence": round(sum(_f(item.get("persistence")) for item in members) / len(members)),
+            "net_in": round(sum(_f(item.get("net_in")) for item in members), 2),
+        })
+    themes.sort(
+        key=lambda item: (
+            len(item.get("members") or []) > 1,
+            _f(item.get("score")),
+            _f(item.get("persistence")),
+            _f(item.get("net_in")),
+        ),
+        reverse=True,
+    )
+    themes = themes[:3]
+    selected_themes = {row["name"] for row in themes}
+    for row in rows:
+        if row.get("level") == "确认主线" and _theme_for_sector(str(row.get("name") or "")) not in selected_themes:
+            row["level"] = "轮动候选"
+            row["stage"] = "轮动观察"
+            row["judgement"] = "不进入明日主计划"
+            row["invalidation"] = "只有强度超过当前主攻线，且广度、资金和龙头承接继续改善，才能升级。"
+    confirmed = [row["name"] for row in themes]
+    weak_market = [row.get("name") for row in (market.get("sectors") or {}).get("top_down") or [] if row.get("name")]
+    return {
+        "rows": rows,
+        "rotation_summary": (
+            f"资金和市场广度共同确认的主攻方向是{'、'.join(confirmed[:4]) or '暂无'}；"
+            f"价格与内部广度同步走弱的方向是{'、'.join(weak_market[:4]) or '暂无'}。"
+            "这里只描述价格、资金和扩散结果，不把新闻标题直接当成上涨原因。"
+        ),
+        "themes": themes,
+    }
+
+
+def _tomorrow_plan(verdict: dict, metrics: dict, history: dict, mainlines: list[dict], mainline_analysis: dict) -> dict:
+    confirmed = _confirmed_themes(mainline_analysis)
     weak = [row["name"] for row in mainlines if row.get("state") in {"资金撤退", "弱势退潮", "假突破"}]
     median_breadth = _f((history.get("medians") or {}).get("up_ratio"), 50)
+    cap = int(_f(verdict.get("position_cap"), 20))
+    upgrade_cap = min(80, cap + 20)
+    focus_text = "、".join(confirmed[:4]) or "没有通过验证的进攻方向"
     return {
         "default_action": verdict["stance"],
-        "position_cap": verdict["position_cap"],
+        "position_cap": cap,
         "focus": confirmed[:4],
         "avoid": weak[:4],
-        "base_case": f"开盘按{verdict['stance']}模式执行，不因单只股票高开改变总仓位。",
+        "base_case": f"明日默认按{verdict['stance']}模式执行，总仓位不超过{cap}%，主看{focus_text}。",
+        "rationale": (
+            f"当前市场定性为{verdict.get('regime')}。仓位上限由量价关系、真实赚钱效应、"
+            "短线失败代价和主线持续性共同决定，不会因一根指数阳线或单只高开临时改变。"
+        ),
+        "allowed": f"只允许参与{focus_text}中的龙头分歧承接和前排二次确认。",
+        "forbidden": "禁止追孤立高开、后排补涨、板块广度不足以及放量滞涨的股票。",
+        "execution": "竞价只看方向，不直接下结论；开盘后等板块广度、龙头承接和成交同时确认再执行。",
         "upgrade_condition": (
             f"只有全市场上涨占比回到{max(55, round(median_breadth))}%以上、跌停/涨停比降至0.5以下、"
-            "炸板率降到30%以下，并且主线广度继续扩散，才提高一级仓位。"
+            f"炸板率降到25%以下，并且主线广度继续扩散，才将仓位上限提高到{upgrade_cap}%。"
         ),
         "downgrade_condition": (
-            "若上涨占比仍低于30%、跌停继续多于涨停，或确认主线在盘中快照里转为资金撤退，"
+            "若指数上涨但等权表现转负、成交放大但收盘远离日内高点，或确认主线的广度、资金和龙头承接同时转弱，"
             "仓位直接压回20%，停止新开仓。"
         ),
     }
@@ -405,6 +711,7 @@ def build_postmarket_intelligence(trade_date: str, market: dict) -> dict:
     history = _history_context(trade_date, metrics)
     path, snapshots = _intraday_path(trade_date)
     mainlines = _mainlines(snapshots)
+    mainline_analysis = _mainline_analysis(mainlines, market)
     try:
         from services.decision_learning_service import get_effective_weights
         risk_weights, learning_version = get_effective_weights()
@@ -412,6 +719,8 @@ def build_postmarket_intelligence(trade_date: str, market: dict) -> dict:
         risk_weights, learning_version = None, {"version": "L0", "sample_count": 0}
     verdict = _regime(metrics, path, risk_weights)
     undercurrents = _undercurrents(metrics, history, path, mainlines)
+    core_judgements = _core_judgements(metrics, history, path, mainlines, mainline_analysis)
+    final_conclusion = _final_conclusion(verdict, core_judgements, mainline_analysis)
     try:
         from services.market_radar_service import evaluate_radar_day
         audit = evaluate_radar_day(trade_date)
@@ -419,7 +728,7 @@ def build_postmarket_intelligence(trade_date: str, market: dict) -> dict:
         audit = {"ready": False, "verdict": f"判断审计暂不可用：{exc}"}
     return {
         "generated_at": datetime.now().isoformat(),
-        "engine": "postmarket-intelligence-v1",
+        "engine": "postmarket-intelligence-v2",
         "data_scope": "收盘全市场 + 历史日档案 + 盘中市场雷达",
         "learning_basis": {
             "version": learning_version.get("version", "L0"),
@@ -428,12 +737,15 @@ def build_postmarket_intelligence(trade_date: str, market: dict) -> dict:
         },
         "metrics": metrics,
         "verdict": verdict,
+        "final_conclusion": final_conclusion,
+        "core_judgements": core_judgements,
         "historical_context": history,
         "intraday_path": path,
         "undercurrents": undercurrents,
         "mainlines": mainlines,
+        "mainline_analysis": mainline_analysis,
         "audit": audit,
-        "tomorrow_plan": _tomorrow_plan(verdict, metrics, history, mainlines),
+        "tomorrow_plan": _tomorrow_plan(verdict, metrics, history, mainlines, mainline_analysis),
         "data_notes": [
             "历史分位仅基于本软件已保存交易日，不代表全市场长期分布。",
             "板块净流入为数据商成交口径推算，只能与广度、价格、龙头和时间序列共同使用。",

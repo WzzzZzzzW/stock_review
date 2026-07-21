@@ -17,6 +17,7 @@ from db.today_review_db import init_db, save_daily, get_daily, list_dates, get_l
 from services.market_clock import can_generate_review, get_market_status
 from services.today_review_service import build_today_review
 from services.decision_learning_service import bootstrap_historical_learning
+from services.postmarket_intelligence_service import build_postmarket_intelligence
 
 router = APIRouter(prefix="/api/today-review", tags=["今日复盘"])
 
@@ -82,6 +83,12 @@ def daily(date: str | None = None):
     if not data:
         return JSONResponse({"data": None, "message": f"{target} 暂无今日复盘"})
     intelligence = data.get("intelligence")
+    if isinstance(data.get("market"), dict) and (
+        not isinstance(intelligence, dict)
+        or intelligence.get("engine") != "postmarket-intelligence-v2"
+    ):
+        intelligence = build_postmarket_intelligence(target, data["market"])
+        data["intelligence"] = intelligence
     if isinstance(intelligence, dict):
         intelligence["learning"] = bootstrap_historical_learning()
     return JSONResponse({"data": data, "generating_status": _status})
