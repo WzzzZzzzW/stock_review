@@ -445,39 +445,65 @@ def _watchlist_review_text(watchlist: dict) -> str:
     ])
 
 
-def _fallback_analysis(market: dict, portfolio: dict, watchlist: dict, industry: dict, international: dict) -> dict:
-    m_sent = market.get("sentiment", {}) or {}
-    breadth = market.get("breadth", {}) or {}
-    limit_stats = market.get("limit_stats", {}) or {}
-    sectors = market.get("sectors", {}) or {}
-    indices = market.get("indices") or []
-    rankings = market.get("rankings") or {}
-    news = market.get("news") or []
-    amount = market.get("amount", {}) or {}
+def _intelligence_market_review(intelligence: dict) -> str:
+    verdict = intelligence.get("verdict") or {}
+    history = intelligence.get("historical_context") or {}
+    path = intelligence.get("intraday_path") or {}
+    undercurrents = intelligence.get("undercurrents") or []
+    mainlines = intelligence.get("mainlines") or []
+    plan = intelligence.get("tomorrow_plan") or {}
+    audit = intelligence.get("audit") or {}
+    signals = []
+    for item in undercurrents:
+        signals.append(
+            f"**{item.get('title', '市场信号')}**\n\n"
+            f"事实：{item.get('evidence', '暂无')}\n\n"
+            f"推断：{item.get('inference', '暂无')}\n\n"
+            f"动作：{item.get('action', '暂无')}"
+        )
+    line_rows = []
+    for row in mainlines[:6]:
+        line_rows.append(
+            f"- **{row.get('name')}｜{row.get('level')}｜{row.get('state')}**："
+            f"{row.get('evidence')} 结论：{row.get('action')}。"
+        )
+    audit_text = audit.get("verdict") if audit.get("ready") else "盘中判断样本不足，本日不做命中率评价。"
+    return "\n".join([
+        "### 今日战场定性",
+        f"**{verdict.get('summary', '证据不足，默认防守。')}** 置信度 {verdict.get('confidence', 0)}%。"
+        f"核心依据：{'；'.join(verdict.get('evidence') or ['暂无完整证据'])}。",
+        "### 市场之下的暗流",
+        "\n\n".join(signals) or "当前没有形成可验证的暗流信号。",
+        "### 主线生命周期",
+        "\n".join(line_rows) or "没有板块同时通过收盘评分、上涨广度和盘中持续率验证，主线为空。",
+        "### 历史位置与盘中路径",
+        f"历史坐标：{history.get('window', '暂无历史样本')}。"
+        f"盘中路径：{path.get('summary', '盘中快照不足')} "
+        f"当前结论只使用已保存证据，不用固定阈值硬套过去行情。",
+        "### 判断审计",
+        audit_text,
+        "### 明日唯一执行方案",
+        f"**默认动作：{plan.get('default_action', '防守')}，总仓位上限 {plan.get('position_cap', 20)}%。** "
+        f"主看：{'、'.join(plan.get('focus') or []) or '没有通过验证的进攻方向'}；"
+        f"回避：{'、'.join(plan.get('avoid') or []) or '按盘中退潮信号动态剔除'}。\n\n"
+        f"升级条件：{plan.get('upgrade_condition', '暂无')}\n\n"
+        f"降级条件：{plan.get('downgrade_condition', '暂无')}",
+    ])
+
+
+def _fallback_analysis(
+    market: dict,
+    portfolio: dict,
+    watchlist: dict,
+    industry: dict,
+    international: dict,
+    intelligence: dict,
+) -> dict:
     ind_up = industry.get("top_up") or []
     ind_down = industry.get("top_down") or []
     intl_items = international.get("items") or []
-    up = _safe_float(breadth.get("up"))
-    down = _safe_float(breadth.get("down"))
-    up_ratio = up / (up + down) * 100 if (up + down) else 0
-    zt = _safe_float(limit_stats.get("zt_count"))
-    dt = _safe_float(limit_stats.get("dt_count"))
-    broken = _safe_float(limit_stats.get("broken_count"))
-    broken_ratio = _safe_float(limit_stats.get("broken_ratio"))
-    idx_line = "；".join(
-        f"{x.get('name')} {_pct_label(_safe_float(x.get('pct')))}"
-        for x in indices[:4]
-        if x.get("name")
-    )
-    up_sectors = "、".join(x.get("name", "") for x in (sectors.get("top_up") or [])[:5]) or "暂无明显领涨"
-    down_sectors = "、".join(x.get("name", "") for x in (sectors.get("top_down") or [])[:5]) or "暂无明显领跌"
-    gainers = "、".join(x.get("name", "") for x in (rankings.get("gainers") or [])[:5]) or "暂无"
-    losers = "、".join(x.get("name", "") for x in (rankings.get("losers") or [])[:5]) or "暂无"
-    news_focus = "；".join(x.get("title", "") for x in news[:3] if x.get("title")) or "暂无足够新闻样本"
     p_points = portfolio.get("analysis_points") or []
-    w_points = watchlist.get("analysis_points") or []
     p_summary = portfolio.get("summary") or {}
-    w_summary = watchlist.get("summary") or {}
     intl_titles = [x.get("title", "") for x in intl_items[:6] if x.get("title")]
     intl_map = []
     for title in intl_titles:
@@ -494,16 +520,7 @@ def _fallback_analysis(market: dict, portfolio: dict, watchlist: dict, industry:
             intl_map.append("政策预期、央国企和大盘风险偏好")
     intl_map_line = "、".join(dict.fromkeys(intl_map)) or "无清晰映射，国际线不纳入主交易计划"
     return {
-        "market_review": "\n".join([
-            "### 市场定性与赚钱效应",
-            f"今天市场情绪为 {m_sent.get('label', '未知')}（{m_sent.get('score', 0)}℃），{m_sent.get('desc', '')}。全市场上涨 {int(up)} 家、下跌 {int(down)} 家，上涨占比约 {up_ratio:.1f}%，说明盘面不是单纯指数行情，而是多数个股参与的扩散型修复。两市成交约 {round(_safe_float(amount.get('total_yi')))} 亿；成交放大叠加炸板偏高时，策略直接从追板切到低吸核心和首分歧承接。",
-            "### 涨跌逻辑",
-            f"涨停 {int(zt)} 只、跌停 {int(dt)} 只、炸板 {int(broken)} 只，炸板率 {broken_ratio:.1f}%。涨停数量处在活跃区间，短线资金仍在寻找弹性；炸板率偏高时直接降低追板权重。指数表现为：{idx_line or '暂无指数数据'}，把资金优先分配给强于指数的题材和中小盘方向。",
-            "### 主线结构",
-            f"板块上，领涨方向集中在 {up_sectors}，领跌方向集中在 {down_sectors}。个股强势榜包括 {gainers}，弱势榜包括 {losers}。领涨板块内部有多只涨停且成交额榜同步出现同方向个股时，直接升级为主线；只有少数个股孤立上涨时，定性为情绪套利，不纳入主计划。",
-            "### 风险与明日动作",
-            f"最高连板 {limit_stats.get('max_continuity', 0)} 板，是短线高度锚点。明天执行三条：涨停数量低于百只就降低接力权重；炸板率不回落就放弃追板；领涨行业掉出涨幅榜和成交榜就切掉对应题材。新闻侧重点：{news_focus}。只做和盘面主线共振的消息，单纯消息刺激一律不追。",
-        ]),
+        "market_review": _intelligence_market_review(intelligence),
         "portfolio_review": "\n".join([
             "### 持仓表现与账户状态",
             f"{portfolio.get('conclusion', '暂无持仓。')} 持仓数量 {p_summary.get('position_count', 0)} 只，今日盈亏 {_safe_float(p_summary.get('today_pnl')):+.2f} 元，总浮盈亏 {_safe_float(p_summary.get('total_pnl_amount')):+.2f} 元。这里不能只看结果，关键是判断盈亏来自趋势延续、情绪波动，还是个股自身量价走弱。",
@@ -538,10 +555,20 @@ def _fallback_analysis(market: dict, portfolio: dict, watchlist: dict, industry:
     }
 
 
-def _build_ai_block_analysis(market: dict, portfolio: dict, watchlist: dict, industry: dict, international: dict, progress_cb=None) -> dict:
+def _build_ai_block_analysis(
+    market: dict,
+    portfolio: dict,
+    watchlist: dict,
+    industry: dict,
+    international: dict,
+    intelligence: dict,
+    progress_cb=None,
+) -> dict:
     if progress_cb:
         progress_cb("AI 生成五大复盘分析...")
-    fallback = _fallback_analysis(market, portfolio, watchlist, industry, international)
+    fallback = _fallback_analysis(market, portfolio, watchlist, industry, international, intelligence)
+    fallback["source"] = "deterministic"
+    fallback["source_label"] = "多维规则引擎"
     try:
         from services.ai_client import make_client, CHAT_MODEL
 
@@ -556,6 +583,7 @@ def _build_ai_block_analysis(market: dict, portfolio: dict, watchlist: dict, ind
                 "rankings": market.get("rankings"),
                 "news": market.get("news"),
             },
+            "postmarket_intelligence": intelligence,
             "portfolio": {
                 "summary": portfolio.get("summary"),
                 "positions": portfolio.get("positions"),
@@ -572,7 +600,7 @@ def _build_ai_block_analysis(market: dict, portfolio: dict, watchlist: dict, ind
             "international": international,
         }
         prompt = f"""
-你是一个激进但理性的 A 股交易复盘助手。用户要看的不是数据罗列，而是每天可执行的复盘分析。
+你是一个激进但理性的 A 股交易复盘助手。用户要看的不是数据罗列，而是市场表面之下正在发生的结构变化。
 
 请基于下面 JSON，分别输出五个模块的 markdown 分析。必须严格返回 JSON 对象，键名固定：
 market_review, portfolio_review, watchlist_review, industry_review, international_review。
@@ -584,6 +612,10 @@ market_review, portfolio_review, watchlist_review, industry_review, internationa
 - 所有判断点必须给唯一动作结论，例如「进攻 / 保留但不追 / 降级 / 剔除 / 收紧仓位」。禁止把正反理由都列出来让用户自己选。
 - 自选复盘必须先给“自选池裁决”：谁是第一顺位，谁剔除，谁降级；结论必须是动作，不得写成含糊建议。
 - 市场复盘要结合情绪温度、涨跌家数、涨停/跌停/炸板、指数、行业主线、个股榜单和新闻。
+- market_review 必须以 postmarket_intelligence 为分析骨架，先给唯一的市场状态和仓位上限，再解释指数与广度背离、大小盘裂口、亏钱效应、历史分位、盘中路径和主线生命周期。
+- 严格区分事实、推断和动作；不得把推算净流入写成绝对资金事实，不得在缺少盘中快照时编造盘中路径。
+- 必须审计早段判断是否被收盘验证，不能只复述收盘涨跌幅。
+- 持仓复盘要做账户归因：区分市场Beta、行业暴露、个股相对强弱和交易假设是否失效，给每只持仓唯一动作。
 - 行业板块要分析为什么这些行业强/弱、是否轮动、持续性怎么看。
 - 国际形势要写清楚国际事件映射到 A 股哪些方向，以及哪些方向纳入计划、哪些方向直接排除，不能只贴新闻标题。
 - 不要喊单，不要承诺收益；但必须激进且理性，给明确执行动作。
@@ -595,11 +627,14 @@ market_review, portfolio_review, watchlist_review, industry_review, internationa
             model=CHAT_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.35,
-            max_tokens=5000,
+            max_tokens=6500,
+            tools=[],
+            thinking={"type": "disabled"},
             timeout=180,
         )
         parsed = _parse_json_obj(resp.choices[0].message.content or "")
         if not parsed:
+            fallback["error"] = "AI 未返回可解析的五模块 JSON，已使用多维规则引擎。"
             return fallback
         merged = dict(fallback)
         for k, v in parsed.items():
@@ -607,6 +642,8 @@ market_review, portfolio_review, watchlist_review, industry_review, internationa
             if len(text) >= 260:
                 merged[k] = text
         merged["watchlist_review"] = _watchlist_review_text(watchlist)
+        merged["source"] = "ai"
+        merged["source_label"] = "AI + 多维规则引擎"
         return merged
     except Exception as e:
         fallback["error"] = str(e)
@@ -620,7 +657,14 @@ def build_today_review(trade_date: str, watchlist: list[dict] | None = None, pro
     industry = _build_industry(progress_cb)
     international = _build_international(progress_cb)
     extra = _build_extra(market, portfolio, watch, industry, international)
-    analysis = _build_ai_block_analysis(market, portfolio, watch, industry, international, progress_cb)
+    if progress_cb:
+        progress_cb("计算历史分位、盘中路径与市场暗流...")
+    from services.postmarket_intelligence_service import build_postmarket_intelligence
+
+    intelligence = build_postmarket_intelligence(trade_date, market)
+    analysis = _build_ai_block_analysis(
+        market, portfolio, watch, industry, international, intelligence, progress_cb
+    )
 
     return {
         "trade_date": trade_date,
@@ -631,5 +675,6 @@ def build_today_review(trade_date: str, watchlist: list[dict] | None = None, pro
         "industry": industry,
         "international": international,
         "analysis": analysis,
+        "intelligence": intelligence,
         **extra,
     }

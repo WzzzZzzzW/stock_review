@@ -62,6 +62,81 @@ type NewsItem = { title: string; summary?: string; source?: string; published?: 
 type IndexItem = { key?: string; name?: string; price?: number; pct?: number }
 type DataInsight = { title: string; evidence: string; meaning: string; tone?: 'red' | 'green' | 'blue' | 'amber' }
 
+type IntelligenceSignal = {
+  title: string
+  signal: string
+  evidence: string
+  inference: string
+  action: string
+  confidence: string
+}
+
+type MainlineState = {
+  name: string
+  state: string
+  level: string
+  action: string
+  score: number
+  pct: number
+  breadth: number
+  net_in: number
+  leader: string
+  persistence: number
+  evidence: string
+}
+
+type PostmarketIntelligence = {
+  engine?: string
+  data_scope?: string
+  verdict?: {
+    regime?: string
+    stance?: string
+    position_cap?: number
+    confidence?: number
+    summary?: string
+    evidence?: string[]
+  }
+  historical_context?: {
+    sample_days?: number
+    window?: string
+    percentiles?: Record<string, number | null>
+    medians?: Record<string, number>
+    previous_date?: string
+    changes_vs_previous?: Record<string, number>
+  }
+  intraday_path?: {
+    available?: boolean
+    snapshot_count?: number
+    first_at?: string
+    last_at?: string
+    first_score?: number
+    last_score?: number
+    first_sector_breadth?: number
+    last_sector_breadth?: number
+    pattern?: string
+    summary?: string
+  }
+  undercurrents?: IntelligenceSignal[]
+  mainlines?: MainlineState[]
+  audit?: {
+    ready?: boolean
+    verdict?: string
+    market?: { summary?: string }
+    sector_hit_rate?: number
+    lessons?: string[]
+  }
+  tomorrow_plan?: {
+    default_action?: string
+    position_cap?: number
+    focus?: string[]
+    avoid?: string[]
+    base_case?: string
+    upgrade_condition?: string
+    downgrade_condition?: string
+  }
+  data_notes?: string[]
+}
+
 type MarketData = {
   summary?: string
   sentiment?: { score?: number; label?: string; emoji?: string; color?: string; desc?: string; index_avg?: number }
@@ -117,8 +192,11 @@ type TodayReview = {
     watchlist_review?: string
     industry_review?: string
     international_review?: string
+    source?: string
+    source_label?: string
     error?: string
   }
+  intelligence?: PostmarketIntelligence
   portfolio: {
     conclusion?: string
     summary?: { total_value?: number; total_pnl_amount?: number; total_pnl_pct?: number; today_pnl?: number; position_count?: number }
@@ -793,9 +871,162 @@ function MarketInsightGrid({ insights }: { insights: DataInsight[] }) {
   )
 }
 
-function MarketReviewBlock({ market, analysis, rankTab, setRankTab }: {
+function PostmarketIntelligencePanel({ intelligence, sourceLabel }: {
+  intelligence: PostmarketIntelligence
+  sourceLabel?: string
+}) {
+  const verdict = intelligence.verdict || {}
+  const history = intelligence.historical_context || {}
+  const percentiles = history.percentiles || {}
+  const path = intelligence.intraday_path || {}
+  const plan = intelligence.tomorrow_plan || {}
+  const audit = intelligence.audit || {}
+  const tone = verdict.stance === '防守' || verdict.stance === '收缩'
+    ? 'border-emerald-800/60 bg-emerald-950/15'
+    : verdict.stance === '进攻' || verdict.stance === '试错'
+      ? 'border-red-800/60 bg-red-950/15'
+      : 'border-blue-800/60 bg-blue-950/15'
+  const stanceTone = verdict.stance === '防守' || verdict.stance === '收缩'
+    ? 'text-emerald-300 border-emerald-800 bg-emerald-950/40'
+    : verdict.stance === '进攻' || verdict.stance === '试错'
+      ? 'text-red-300 border-red-800 bg-red-950/40'
+      : 'text-blue-300 border-blue-800 bg-blue-950/40'
+  const percentileRows = [
+    ['上涨广度', percentiles.up_ratio],
+    ['跌停压力', percentiles.dt],
+    ['炸板风险', percentiles.broken_ratio],
+    ['成交活跃', percentiles.amount],
+  ] as const
+
+  return (
+    <div className="space-y-4">
+      <section className={`rounded-lg border p-4 ${tone}`}>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-gray-500">今日战场定性</span>
+              <span className={`rounded border px-2 py-0.5 text-xs font-bold ${stanceTone}`}>{verdict.stance || '待确认'}</span>
+              <span className="rounded border border-gray-700 bg-gray-900 px-2 py-0.5 text-[11px] text-gray-400">
+                {sourceLabel || '多维规则引擎'}
+              </span>
+            </div>
+            <h3 className="mt-2 text-xl font-bold text-white">{verdict.regime || '市场状态待确认'}</h3>
+            <p className="mt-2 text-sm leading-6 text-gray-300">{verdict.summary}</p>
+          </div>
+          <div className="shrink-0 text-right">
+            <div className="text-[11px] text-gray-500">次日仓位上限</div>
+            <div className="mt-1 font-mono text-3xl font-bold text-white">{verdict.position_cap ?? '--'}%</div>
+            <div className="mt-1 text-[11px] text-gray-500">判断置信度 {verdict.confidence ?? '--'}%</div>
+          </div>
+        </div>
+        {!!verdict.evidence?.length && (
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-gray-800/80 pt-3">
+            {verdict.evidence.map((item, index) => (
+              <span key={index} className="rounded bg-gray-950/70 px-2.5 py-1 text-xs text-gray-300">{item}</span>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="overflow-hidden rounded-lg border border-gray-800 bg-gray-950/45">
+        <div className="border-b border-gray-800 px-4 py-3">
+          <div className="text-sm font-bold text-white">市场之下的暗流</div>
+          <div className="mt-0.5 text-xs text-gray-500">每条结论都拆成事实、推断和默认动作</div>
+        </div>
+        <div className="divide-y divide-gray-800">
+          {(intelligence.undercurrents || []).map((item, index) => (
+            <div key={`${item.title}-${index}`} className="px-4 py-4">
+              <div className="flex items-center gap-2">
+                <span className="rounded border border-blue-800/60 bg-blue-950/30 px-2 py-0.5 text-[11px] font-bold text-blue-300">{item.signal}</span>
+                <h4 className="text-sm font-bold text-white">{item.title}</h4>
+                <span className="ml-auto text-[11px] text-gray-600">置信度 {item.confidence}</span>
+              </div>
+              <div className="mt-2 grid grid-cols-[56px_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs leading-5">
+                <span className="text-gray-600">事实</span><span className="text-gray-400">{item.evidence}</span>
+                <span className="text-gray-600">推断</span><span className="text-gray-300">{item.inference}</span>
+                <span className="font-semibold text-blue-400">动作</span><span className="font-semibold text-blue-200">{item.action}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-gray-800 bg-gray-950/45 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-bold text-white">历史坐标与盘中路径</div>
+            <div className="mt-0.5 text-xs text-gray-500">{history.window || '历史样本不足'} · 分位越高代表该指标在自身历史中越突出</div>
+          </div>
+          <span className="text-xs text-gray-500">{path.snapshot_count ?? 0} 个快照</span>
+        </div>
+        <div className="mt-3 grid grid-cols-4 gap-2">
+          {percentileRows.map(([label, value]) => (
+            <div key={label} className="rounded border border-gray-800 bg-gray-900/70 px-3 py-2">
+              <div className="text-[11px] text-gray-500">{label}</div>
+              <div className="mt-1 font-mono text-lg font-bold text-white">{value == null ? '--' : `${value}分位`}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 rounded border border-gray-800 bg-gray-900/70 px-3 py-3">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="font-bold text-blue-300">{path.available ? path.pattern : '路径不可用'}</span>
+            {path.available && <span className="text-gray-500">市场评分 {path.first_score} → {path.last_score} · 板块广度 {path.first_sector_breadth}% → {path.last_sector_breadth}%</span>}
+          </div>
+          <p className="mt-1 text-xs leading-5 text-gray-400">{path.summary}</p>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-lg border border-gray-800 bg-gray-950/45">
+        <div className="border-b border-gray-800 px-4 py-3">
+          <div className="text-sm font-bold text-white">主线生命周期</div>
+          <div className="mt-0.5 text-xs text-gray-500">涨幅只是结果，收盘评分、广度、盘中持续率和龙头承接共同决定资格</div>
+        </div>
+        <div className="divide-y divide-gray-800">
+          {(intelligence.mainlines || []).slice(0, 8).map(row => (
+            <div key={row.name} className="grid grid-cols-[180px_110px_1fr_130px] items-center gap-3 px-4 py-3 text-xs">
+              <div>
+                <div className="font-semibold text-white">{row.name}</div>
+                <div className="mt-0.5 text-gray-600">龙头 {row.leader}</div>
+              </div>
+              <div>
+                <div className={row.level === '确认主线' ? 'font-bold text-red-300' : row.level === '分歧降级' ? 'font-bold text-emerald-300' : 'font-bold text-blue-300'}>{row.level}</div>
+                <div className="mt-0.5 text-gray-600">{row.state}</div>
+              </div>
+              <div className="text-gray-400">评分 {row.score} · 广度 {row.breadth}% · 持续率 {row.persistence}% · 净流入推算 {row.net_in > 0 ? '+' : ''}{row.net_in.toFixed(2)}亿</div>
+              <div className="text-right font-semibold text-blue-200">{row.action}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-gray-800 bg-gray-950/45 p-4">
+        <div className="text-sm font-bold text-white">判断审计</div>
+        <p className="mt-2 text-sm leading-6 text-gray-300">{audit.ready ? audit.verdict : audit.verdict || '盘中判断样本不足，本日不做命中率评价。'}</p>
+        {audit.market?.summary && <p className="mt-1 text-xs leading-5 text-gray-500">{audit.market.summary}</p>}
+        {!!audit.lessons?.length && <p className="mt-2 text-xs leading-5 text-blue-300">修正：{audit.lessons.join(' ')}</p>}
+      </section>
+
+      <section className="rounded-lg border border-blue-800/60 bg-blue-950/15 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm font-bold text-blue-200">明日唯一执行方案</div>
+          <span className="rounded border border-blue-800 bg-gray-950/50 px-2 py-1 text-xs font-bold text-blue-300">{plan.default_action} · 上限 {plan.position_cap}%</span>
+        </div>
+        <p className="mt-3 text-sm font-semibold leading-6 text-white">{plan.base_case}</p>
+        <div className="mt-3 space-y-2 text-xs leading-5">
+          <div className="rounded bg-gray-950/70 px-3 py-2 text-gray-300"><span className="text-red-300">主看：</span>{plan.focus?.join('、') || '没有通过验证的进攻方向'}</div>
+          <div className="rounded bg-gray-950/70 px-3 py-2 text-gray-300"><span className="text-blue-300">升级：</span>{plan.upgrade_condition}</div>
+          <div className="rounded bg-gray-950/70 px-3 py-2 text-gray-300"><span className="text-emerald-300">降级：</span>{plan.downgrade_condition}</div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function MarketReviewBlock({ market, analysis, intelligence, analysisSource, rankTab, setRankTab }: {
   market?: MarketData
   analysis?: string
+  intelligence?: PostmarketIntelligence
+  analysisSource?: string
   rankTab: 'gainers' | 'losers' | 'amount' | 'turnover'
   setRankTab: (tab: 'gainers' | 'losers' | 'amount' | 'turnover') => void
 }) {
@@ -806,10 +1037,14 @@ function MarketReviewBlock({ market, analysis, rankTab, setRankTab }: {
   const sectors = market.sectors || {}
   const insights = buildMarketInsights(market)
   return (
-    <ReviewSection index="01" title="市场复盘" aside="从原市场复盘整合到今日复盘">
+    <ReviewSection index="01" title="市场复盘" aside="战场定性、市场暗流、主线生命周期与明日方案" defaultOpen>
       <div className="space-y-4">
-        <MarketInsightGrid insights={insights} />
-        <AnalysisMarkdown text={analysis} title="市场逻辑判断" />
+        {intelligence
+          ? <PostmarketIntelligencePanel intelligence={intelligence} sourceLabel={analysisSource} />
+          : <MarketInsightGrid insights={insights} />}
+        {intelligence
+          ? <DetailBox title="AI 完整论证（展开查看）"><AnalysisMarkdown text={analysis} title="市场逻辑判断" /></DetailBox>
+          : <AnalysisMarkdown text={analysis} title="市场逻辑判断" />}
         {market.summary && <p className="px-1 text-sm leading-relaxed text-gray-400">{market.summary}</p>}
 
         <div className="space-y-4">
@@ -1258,9 +1493,16 @@ export default function TodayReviewPage() {
             <p className="mt-3 text-sm leading-6 text-gray-300">{m?.summary}</p>
           </section>
 
-          <MarketRadarEvaluation tradeDate={data.trade_date} />
+          {!data.intelligence && <MarketRadarEvaluation tradeDate={data.trade_date} />}
 
-          <MarketReviewBlock market={m} analysis={a?.market_review} rankTab={rankTab} setRankTab={setRankTab} />
+          <MarketReviewBlock
+            market={m}
+            analysis={a?.market_review}
+            intelligence={data.intelligence}
+            analysisSource={a?.source_label}
+            rankTab={rankTab}
+            setRankTab={setRankTab}
+          />
 
           <ReviewSection index="02" title="持仓复盘" aside="账户盈亏、逐只持仓逻辑、风险动作">
             <div className="space-y-3">
