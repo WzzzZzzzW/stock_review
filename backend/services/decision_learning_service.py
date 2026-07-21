@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 import math
+import threading
+from datetime import date, timedelta
 from typing import Any
 
 from db import decision_learning_db
 
 
 MIN_SAMPLES = 30
+MIN_LIVE_SAMPLES = 5
 UPDATE_INTERVAL = 5
 VALIDATION_SIZE = 10
+
+_bootstrap_lock = threading.Lock()
+_bootstrap_done = False
 
 DEFAULT_RISK_WEIGHTS = {
     "breadth_low": 2.0,
@@ -158,6 +164,10 @@ def _evaluate(previous: dict, current: dict, outcome_date: str) -> dict:
     return {
         "decision_date": previous_day,
         "outcome_date": outcome_date,
+        "sample_source": previous.get("source") or "live",
+        "sample_source_label": (
+            "历史回放" if previous.get("source") == "historical_replay" else "上线后前瞻"
+        ),
         "title": title,
         "overall_score": overall,
         "prior_stance": prior_verdict.get("stance") or "待确认",
@@ -236,8 +246,16 @@ def _candidate_weights(current: dict[str, float], train: list[dict]) -> tuple[di
 def _maybe_update_weights() -> dict | None:
     rows = decision_learning_db.list_outcomes()
     sample_count = len(rows)
+    live_count = sum(
+        1 for row in rows
+        if (row.get("outcome") or {}).get("sample_source", "live") == "live"
+    )
     last_attempt = decision_learning_db.latest_learning_attempt()
-    if sample_count < MIN_SAMPLES or sample_count % UPDATE_INTERVAL:
+    if (
+        sample_count < MIN_SAMPLES
+        or live_count < MIN_LIVE_SAMPLES
+        or sample_count % UPDATE_INTERVAL
+    ):
         return last_attempt
     if last_attempt and int(last_attempt.get("sample_count") or 0) == sample_count:
         return last_attempt
@@ -303,10 +321,22 @@ def get_learning_profile() -> dict:
     latest = outcomes[-1].get("outcome") if outcomes else None
     attempt = decision_learning_db.latest_learning_attempt()
     count = len(outcomes)
+    historical_count = sum(
+        1 for row in outcomes
+        if (row.get("outcome") or {}).get("sample_source") == "historical_replay"
+    )
+    live_count = count - historical_count
     if count < MIN_SAMPLES:
         state = "collecting"
         label = "学习样本积累中"
         next_action = f"还需{MIN_SAMPLES - count}个有效次日结果，达到门槛后才允许调整权重。"
+    elif live_count < MIN_LIVE_SAMPLES:
+        state = "awaiting_live"
+        label = "等待真实前瞻样本"
+        next_action = (
+            f"历史回放已达总样本门槛，还需{MIN_LIVE_SAMPLES - live_count}个上线后前瞻结果"
+            "才允许调整权重。"
+        )
     elif count % UPDATE_INTERVAL:
         state = "waiting_cycle"
         label = "等待下一次五日学习周期"
@@ -323,7 +353,10 @@ def get_learning_profile() -> dict:
         "state": state,
         "label": label,
         "valid_outcomes": count,
+        "historical_outcomes": historical_count,
+        "live_outcomes": live_count,
         "minimum_samples": MIN_SAMPLES,
+        "minimum_live_samples": MIN_LIVE_SAMPLES,
         "progress_pct": min(100, round(count / MIN_SAMPLES * 100)),
         "update_interval": UPDATE_INTERVAL,
         "effective_version": effective.get("version") or "L0",
@@ -338,12 +371,75 @@ def get_learning_profile() -> dict:
         "guardrails": [
             "单个因子每次最多调整原始权重的3%。",
             "候选权重必须在留出样本上降低误差且不能增加风险漏判。",
+            f"历史回放只用当时可见数据，且至少积累{MIN_LIVE_SAMPLES}个上线后前瞻样本才能改权重。",
             "AI不能自行修改代码、样本标签或学习门槛。",
         ],
     }
 
 
+def _is_next_business_day(previous_date: str, current_date: str) -> bool:
+    """Conservative session check: weekends are skipped, unknown weekday gaps are not."""
+    try:
+        candidate = date.fromisoformat(previous_date) + timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate += timedelta(days=1)
+        return candidate.isoformat() == current_date
+    except ValueError:
+        return False
+
+
+def bootstrap_historical_learning(force: bool = False) -> dict:
+    """Replay saved market archives without pretending they were live predictions."""
+    global _bootstrap_done
+    if _bootstrap_done and not force:
+        return get_learning_profile()
+
+    with _bootstrap_lock:
+        if _bootstrap_done and not force:
+            return get_learning_profile()
+
+        from db import market_review_db
+        from services.postmarket_intelligence_service import build_postmarket_intelligence
+
+        dates = sorted(
+            row["date"] for row in market_review_db.list_dates() if row.get("date")
+        )
+        for trade_date in dates:
+            if decision_learning_db.get_decision(trade_date):
+                continue
+            market = market_review_db.get_daily(trade_date)
+            if not market:
+                continue
+            intelligence = build_postmarket_intelligence(trade_date, market)
+            decision_learning_db.save_decision(
+                trade_date,
+                _decision_payload(intelligence),
+                str(intelligence.get("engine") or "postmarket-intelligence-v1"),
+                "historical_replay",
+            )
+
+        decisions = sorted(
+            decision_learning_db.list_decisions(limit=500),
+            key=lambda row: row["trade_date"],
+        )
+        for previous, current in zip(decisions, decisions[1:]):
+            previous_date = previous["trade_date"]
+            current_date = current["trade_date"]
+            if (
+                decision_learning_db.get_outcome(previous_date)
+                or not _is_next_business_day(previous_date, current_date)
+            ):
+                continue
+            outcome = _evaluate(previous, current["decision"], current_date)
+            decision_learning_db.save_outcome(previous_date, current_date, outcome)
+
+        _maybe_update_weights()
+        _bootstrap_done = True
+        return get_learning_profile()
+
+
 def record_decision_and_learn(trade_date: str, intelligence: dict, source: str = "live") -> dict:
+    bootstrap_historical_learning()
     payload = _decision_payload(intelligence)
     previous = decision_learning_db.previous_decision(trade_date)
     decision_learning_db.save_decision(
@@ -352,7 +448,7 @@ def record_decision_and_learn(trade_date: str, intelligence: dict, source: str =
         str(intelligence.get("engine") or "postmarket-intelligence-v1"),
         source,
     )
-    if previous:
+    if previous and _is_next_business_day(previous["trade_date"], trade_date):
         outcome = _evaluate(previous, intelligence, trade_date)
         decision_learning_db.save_outcome(previous["trade_date"], trade_date, outcome)
     _maybe_update_weights()

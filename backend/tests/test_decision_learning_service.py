@@ -12,7 +12,9 @@ from services.decision_learning_service import (  # noqa: E402
     DEFAULT_RISK_WEIGHTS,
     _candidate_weights,
     _evaluate,
+    _is_next_business_day,
     _maybe_update_weights,
+    bootstrap_historical_learning,
     factor_signals,
     get_learning_profile,
 )
@@ -80,6 +82,61 @@ class DecisionLearningServiceTests(unittest.TestCase):
         self.assertEqual(outcome["focus_hit_rate"], 50)
         self.assertTrue(outcome["target_risk"])
         self.assertIn("防守判断有效", outcome["title"])
+
+    def test_historical_replay_is_labeled_and_weekend_counts_as_next_session(self):
+        previous = {
+            "trade_date": "2026-07-17",
+            "source": "historical_replay",
+            "decision": {
+                "verdict": {"stance": "防守"},
+                "tomorrow_plan": {"position_cap": 20},
+                "risk_group": "risk",
+            },
+        }
+
+        outcome = _evaluate(
+            previous,
+            {"verdict": {"stance": "收缩", "regime": "全面退潮"}},
+            "2026-07-20",
+        )
+
+        self.assertTrue(_is_next_business_day("2026-07-17", "2026-07-20"))
+        self.assertFalse(_is_next_business_day("2026-07-16", "2026-07-20"))
+        self.assertEqual(outcome["sample_source_label"], "历史回放")
+
+    def test_bootstrap_replays_saved_adjacent_archives(self):
+        def fake_intelligence(trade_date, _market):
+            stance = "防守" if trade_date.endswith("20") else "中性"
+            return {
+                "engine": "test-v1",
+                "metrics": {"up_ratio": 35 if stance == "防守" else 55},
+                "verdict": {"stance": stance, "regime": stance, "position_cap": 20},
+                "tomorrow_plan": {"position_cap": 20, "focus": []},
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "learning.db")
+            with (
+                patch.object(decision_learning_db, "DB_PATH", path),
+                patch("services.decision_learning_service._bootstrap_done", False),
+                patch("db.market_review_db.list_dates", return_value=[
+                    {"date": "2026-07-21"},
+                    {"date": "2026-07-20"},
+                    {"date": "2026-07-17"},
+                ]),
+                patch("db.market_review_db.get_daily", return_value={"breadth": {}}),
+                patch(
+                    "services.postmarket_intelligence_service.build_postmarket_intelligence",
+                    side_effect=fake_intelligence,
+                ),
+            ):
+                decision_learning_db.init_db()
+                profile = bootstrap_historical_learning(force=True)
+
+                self.assertEqual(len(decision_learning_db.list_decisions()), 3)
+                self.assertEqual(profile["valid_outcomes"], 2)
+                self.assertEqual(profile["historical_outcomes"], 2)
+                self.assertEqual(profile["live_outcomes"], 0)
 
     def test_candidate_weight_step_is_bounded_to_three_percent(self):
         rows = []

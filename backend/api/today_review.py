@@ -16,6 +16,7 @@ from db import watchlist_db
 from db.today_review_db import init_db, save_daily, get_daily, list_dates, get_latest_date
 from services.market_clock import can_generate_review, get_market_status
 from services.today_review_service import build_today_review
+from services.decision_learning_service import bootstrap_historical_learning
 
 router = APIRouter(prefix="/api/today-review", tags=["今日复盘"])
 
@@ -80,6 +81,9 @@ def daily(date: str | None = None):
     data = get_daily(target)
     if not data:
         return JSONResponse({"data": None, "message": f"{target} 暂无今日复盘"})
+    intelligence = data.get("intelligence")
+    if isinstance(intelligence, dict):
+        intelligence["learning"] = bootstrap_historical_learning()
     return JSONResponse({"data": data, "generating_status": _status})
 
 

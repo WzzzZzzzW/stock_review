@@ -129,7 +129,10 @@ type PostmarketIntelligence = {
     state?: string
     label?: string
     valid_outcomes?: number
+    historical_outcomes?: number
+    live_outcomes?: number
     minimum_samples?: number
+    minimum_live_samples?: number
     progress_pct?: number
     update_interval?: number
     effective_version?: string
@@ -148,6 +151,8 @@ type PostmarketIntelligence = {
       focus_hit_rate?: number | null
       focus_details?: { name: string; followed: boolean; state: string; score?: number }[]
       lessons?: string[]
+      sample_source?: string
+      sample_source_label?: string
     }
     latest_attempt?: {
       version?: string
@@ -1061,6 +1066,10 @@ function PostmarketIntelligencePanel({ intelligence, sourceLabel }: {
             <span className="text-gray-400">有效次日结果 {learning.valid_outcomes ?? 0} / {learning.minimum_samples ?? 30}</span>
             <span className="text-gray-600">每 {learning.update_interval ?? 5} 个交易日重新验证</span>
           </div>
+          <div className="mt-1.5 flex items-center gap-3 text-[11px] text-gray-600">
+            <span>历史回放 {learning.historical_outcomes ?? 0}</span>
+            <span>上线后前瞻 {learning.live_outcomes ?? 0} / {learning.minimum_live_samples ?? 5}</span>
+          </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded bg-gray-900">
             <div className="h-full bg-indigo-500 transition-all" style={{ width: `${Math.min(100, Math.max(0, learning.progress_pct ?? 0))}%` }} />
           </div>
@@ -1071,7 +1080,12 @@ function PostmarketIntelligencePanel({ intelligence, sourceLabel }: {
           <div className="border-t border-indigo-900/40 px-4 py-4">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-sm font-bold text-white">{yesterdayAudit.title}</div>
+                <div className="flex items-center gap-2">
+                  <div className="text-sm font-bold text-white">{yesterdayAudit.title}</div>
+                  <span className={`rounded border px-1.5 py-0.5 text-[10px] ${yesterdayAudit.sample_source === 'historical_replay' ? 'border-amber-800/60 bg-amber-950/30 text-amber-300' : 'border-indigo-800/60 bg-indigo-950/30 text-indigo-300'}`}>
+                    {yesterdayAudit.sample_source_label || '上线后前瞻'}
+                  </span>
+                </div>
                 <div className="mt-1 text-xs text-gray-500">
                   {yesterdayAudit.decision_date} 判断：{yesterdayAudit.prior_stance}、仓位上限 {yesterdayAudit.prior_position_cap}%
                   <span className="mx-2">→</span>
@@ -1096,7 +1110,7 @@ function PostmarketIntelligencePanel({ intelligence, sourceLabel }: {
           </div>
         ) : (
           <div className="border-t border-indigo-900/40 px-4 py-4 text-xs leading-5 text-gray-500">
-            第一条判断已进入账本。下一交易日盘后生成后，系统会用真实结果形成首份“昨日判断审计”。
+            尚无可对齐的相邻交易日样本。历史档案会自动回放，上线后判断则在下一交易日用真实结果审计。
           </div>
         )}
 
