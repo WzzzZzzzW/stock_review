@@ -315,10 +315,74 @@ def _factor_learning_summary(rows: list[dict]) -> list[dict]:
     return result
 
 
+def _explain_audit(outcome: dict | None) -> dict | None:
+    if not outcome:
+        return None
+
+    result = dict(outcome)
+    overall = int(_f(result.get("overall_score")))
+    budget_score = int(_f(result.get("risk_budget_score")))
+    regime_persisted = bool(result.get("regime_persisted"))
+    focus_hit_rate = result.get("focus_hit_rate")
+
+    if overall >= 75 and budget_score >= 70:
+        judgement = "正确"
+        judgement_level = "correct"
+    elif overall >= 50:
+        judgement = "部分正确"
+        judgement_level = "partial"
+    else:
+        judgement = "错误"
+        judgement_level = "wrong"
+
+    keep_points = []
+    wrong_points = []
+    improvements = []
+    if budget_score >= 70:
+        keep_points.append(
+            f"仓位上限{result.get('prior_position_cap', '--')}%与今日风险程度匹配。"
+        )
+    else:
+        wrong_points.append(
+            f"仓位上限{result.get('prior_position_cap', '--')}%与今日实际风险不匹配。"
+        )
+        improvements.append("提高市场广度、跌停压力和盘中转弱信号对仓位上限的约束。")
+
+    if regime_persisted:
+        keep_points.append("市场方向判断与今日实际状态一致。")
+    else:
+        wrong_points.append("市场状态发生切换，昨日没有准确判断今日方向。")
+        improvements.append("提高状态切换、指数承接和板块广度变化的识别优先级。")
+
+    if focus_hit_rate is not None:
+        if _f(focus_hit_rate) >= 60:
+            keep_points.append(f"关注主线延续率{focus_hit_rate}%，方向筛选有效。")
+        else:
+            wrong_points.append(f"关注主线延续率仅{focus_hit_rate}%，方向筛选失败。")
+            improvements.append("降低弱延续方向权重，只保留广度、资金和龙头承接同时确认的主线。")
+
+    if judgement_level == "correct":
+        action = "保持原判断框架，本次不修正核心规则。"
+    elif judgement_level == "partial":
+        action = "保留判对的部分，对上述失误项降低信任度并继续验证。"
+    else:
+        action = "本次判错，错误因子已记入学习账本，后续优先修正。"
+
+    result.update({
+        "judgement": judgement,
+        "judgement_level": judgement_level,
+        "keep_points": keep_points,
+        "wrong_points": wrong_points,
+        "improvements": improvements,
+        "learning_action": action,
+    })
+    return result
+
+
 def get_learning_profile() -> dict:
     outcomes = decision_learning_db.list_outcomes()
     weights, effective = get_effective_weights()
-    latest = outcomes[-1].get("outcome") if outcomes else None
+    latest = _explain_audit(outcomes[-1].get("outcome")) if outcomes else None
     attempt = decision_learning_db.latest_learning_attempt()
     count = len(outcomes)
     historical_count = sum(

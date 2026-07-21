@@ -12,6 +12,7 @@ from services.decision_learning_service import (  # noqa: E402
     DEFAULT_RISK_WEIGHTS,
     _candidate_weights,
     _evaluate,
+    _explain_audit,
     _is_next_business_day,
     _maybe_update_weights,
     bootstrap_historical_learning,
@@ -103,6 +104,28 @@ class DecisionLearningServiceTests(unittest.TestCase):
         self.assertTrue(_is_next_business_day("2026-07-17", "2026-07-20"))
         self.assertFalse(_is_next_business_day("2026-07-16", "2026-07-20"))
         self.assertEqual(outcome["sample_source_label"], "历史回放")
+
+    def test_audit_explanation_leads_with_right_or_wrong_and_next_change(self):
+        correct = _explain_audit({
+            "overall_score": 100,
+            "risk_budget_score": 100,
+            "regime_persisted": True,
+            "prior_position_cap": 20,
+            "focus_hit_rate": None,
+        })
+        wrong = _explain_audit({
+            "overall_score": 25,
+            "risk_budget_score": 15,
+            "regime_persisted": False,
+            "prior_position_cap": 70,
+            "focus_hit_rate": 20,
+        })
+
+        self.assertEqual(correct["judgement"], "正确")
+        self.assertIn("保持原判断", correct["learning_action"])
+        self.assertEqual(wrong["judgement"], "错误")
+        self.assertEqual(len(wrong["wrong_points"]), 3)
+        self.assertEqual(len(wrong["improvements"]), 3)
 
     def test_bootstrap_replays_saved_adjacent_archives(self):
         def fake_intelligence(trade_date, _market):
