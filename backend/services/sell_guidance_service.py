@@ -9,9 +9,14 @@
 「会买是徒弟，会卖是师傅」——这个模块专治拿不住和卖飞。
 """
 import json
+import logging
 import re
 
 from services.ai_client import make_client, CHAT_MODEL
+
+
+logger = logging.getLogger("stock_review.sell_guidance")
+SELL_GUIDANCE_MAX_TOKENS = 1800
 
 SYSTEM = """你是一位看盘见长的A股操盘手，专门给持仓做「此刻该不该动」的卖点诊断。
 
@@ -170,24 +175,55 @@ def diagnose(pos: dict, tech: dict, exit_rules: list[dict]) -> dict:
     user_msg = _build_user_msg(pos, tech, exit_rules)
     client = make_client()
 
-    def _call() -> dict:
+    def _call(previous_raw: str = "") -> tuple[dict, str, str]:
+        messages = [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": user_msg},
+        ]
+        if previous_raw:
+            messages.extend([
+                {"role": "assistant", "content": previous_raw[:6000]},
+                {
+                    "role": "user",
+                    "content": (
+                        "上一个回答无法解析。保持原判断，只修复为完整合法的 JSON，"
+                        "不要 markdown、解释、前后缀或省略字段。"
+                    ),
+                },
+            ])
         resp = client.chat.completions.create(
             model=CHAT_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM},
-                {"role": "user", "content": user_msg},
-            ],
-            max_tokens=1300,
+            messages=messages,
+            tools=[],
+            tool_choice="none",
+            thinking={"type": "disabled"},
+            max_tokens=SELL_GUIDANCE_MAX_TOKENS,
             temperature=0.3,
         )
-        return _parse(resp.choices[0].message.content or "")
+        choice = resp.choices[0]
+        raw = choice.message.content or ""
+        finish_reason = choice.finish_reason or ""
+        parsed = {} if finish_reason == "length" else _parse(raw)
+        return parsed, raw, finish_reason
 
     # 解析失败重试一次；仍拿不到合法决策则抛错（绝不静默兜底成「持有」，
     # 否则一次解析失败会被误读成「确定性持有」，对卖出工具是危险的）
-    r = _call()
+    r, raw, finish_reason = _call()
     if r.get("decision") not in _VALID_DECISIONS:
-        r = _call()
+        logger.warning(
+            "invalid sell guidance output symbol=%s finish_reason=%s text_chars=%d retry=true",
+            pos.get("symbol", ""),
+            finish_reason,
+            len(raw),
+        )
+        r, raw, finish_reason = _call(raw)
     if r.get("decision") not in _VALID_DECISIONS:
+        logger.error(
+            "invalid sell guidance output symbol=%s finish_reason=%s text_chars=%d retry=false",
+            pos.get("symbol", ""),
+            finish_reason,
+            len(raw),
+        )
         raise ValueError("AI 返回无法解析为有效卖点结论，请重试")
 
     decision = r["decision"]
