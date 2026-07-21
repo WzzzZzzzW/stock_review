@@ -292,7 +292,10 @@ _NEWS_SECTOR_HINTS = {
 _PERSONAL_SECTOR_HINTS = {
     # Single-user product: keep high-value known mappings exact, then fall back to generic industry matching.
     "北方华创": "半导体",
+    "华天科技": "半导体",
     "长电科技": "半导体",
+    "恒瑞医药": "化学制药",
+    "药明康德": "医疗服务",
     "浪潮信息": "计算机设备",
     "泛微网络": "软件开发",
     "华友钴业": "能源金属",

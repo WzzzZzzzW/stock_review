@@ -43,6 +43,7 @@ type Stock = {
   turnover?: number
   amount_yi?: number
   change_pct?: number
+  industry?: string
   logic?: string
   tech?: {
     vol_ratio?: number
@@ -50,6 +51,32 @@ type Stock = {
     macd_state?: string
     turnover?: number
     close?: number
+  }
+  fund_flow?: {
+    available?: boolean
+    date?: string
+    main_net_yi?: number
+    main_net_pct?: number
+    super_net_yi?: number
+    big_net_yi?: number
+    mid_net_yi?: number
+    small_net_yi?: number
+    basis?: string
+    note?: string
+  }
+  sector?: {
+    name?: string
+    pct_num?: number
+    breadth_pct?: number
+    net_in_yi?: number
+    leader?: string
+    fund_change?: {
+      first_net_in_yi?: number
+      last_net_in_yi?: number
+      net_in_change_yi?: number
+      snapshot_count?: number
+    }
+    decision?: MultiDecision
   }
   decision?: MultiDecision
 }
@@ -260,7 +287,36 @@ type Industry = {
   down_count?: string
   leader?: string
   net_in?: string
+  net_in_yi?: number
+  breadth_pct?: number
+  fund_change?: {
+    first_net_in_yi?: number
+    last_net_in_yi?: number
+    net_in_change_yi?: number
+    snapshot_count?: number
+  }
+  fund_basis?: string
   decision?: MultiDecision
+}
+
+type StockRef = { symbol?: string; name?: string }
+
+type RiskOpportunityItem = {
+  title?: string
+  industry?: string
+  stocks?: StockRef[]
+  evidence?: string
+  action?: string
+}
+
+type TomorrowWatchItem = {
+  theme?: string
+  industry?: string
+  stocks?: StockRef[]
+  evidence?: string
+  trigger?: string
+  invalidation?: string
+  action?: string
 }
 
 type Trend = {
@@ -311,10 +367,11 @@ type TodayReview = {
     items?: Trend[]
   }
   risk_opportunity?: {
-    risks?: string[]
-    opportunities?: string[]
+    risks?: (string | RiskOpportunityItem)[]
+    opportunities?: (string | RiskOpportunityItem)[]
   }
-  tomorrow_watch?: string[]
+  tomorrow_watch?: (string | TomorrowWatchItem)[]
+  evidence_basis?: string
 }
 
 function todayStr() {
@@ -363,6 +420,19 @@ function fmtMoney(v?: number) {
   const n = Number(v || 0)
   if (Math.abs(n) >= 10000) return `${(n / 10000).toFixed(2)}万`
   return n.toFixed(2)
+}
+
+function fmtYi(v?: number) {
+  if (v == null || !Number.isFinite(Number(v))) return '--'
+  const n = Number(v)
+  return `${n > 0 ? '+' : ''}${n.toFixed(2)}亿`
+}
+
+function stockRefs(items?: StockRef[]) {
+  return (items || [])
+    .filter(item => item.name || item.symbol)
+    .map(item => item.name && item.symbol ? `${item.name} ${item.symbol}` : item.name || item.symbol)
+    .join('、')
 }
 
 function safeNum(v: unknown) {
@@ -608,18 +678,39 @@ function StockList({ items, empty }: { items?: Stock[]; empty: string }) {
   if (!items?.length) return <div className="text-sm text-gray-500">{empty}</div>
   return (
     <div className="space-y-2">
-      {items.slice(0, 5).map(s => (
+      {items.slice(0, 8).map(s => (
         <div key={`${s.symbol}-${s.name}`} className="rounded-md bg-gray-950/60 px-3 py-2">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="truncate text-sm text-gray-100">{s.name || s.symbol}</div>
               <div className="text-[11px] text-gray-600">
                 {s.symbol}
+                {s.industry && <span className="ml-2 text-blue-300/80">{s.industry}</span>}
                 {typeof (s.tech as any)?.technical?.vol_ratio === 'number' && <span className="ml-2">量比 {(s.tech as any).technical.vol_ratio.toFixed(2)}</span>}
                 {typeof (s.tech as any)?.technical?.ma20_pct === 'number' && <span className="ml-2">距20日线 {fmtPct((s.tech as any).technical.ma20_pct)}</span>}
               </div>
             </div>
             <div className={`shrink-0 text-sm font-semibold ${pctClass(stockPct(s))}`}>{fmtPct(stockPct(s))}</div>
+          </div>
+          <div className="mt-2 grid grid-cols-4 gap-2 text-[11px]">
+            <div className="rounded bg-gray-900/70 px-2 py-1.5">
+              <div className="text-gray-600">个股主力净额</div>
+              <div className={s.fund_flow?.available ? pctClass(s.fund_flow.main_net_yi) : 'text-gray-500'}>
+                {s.fund_flow?.available ? fmtYi(s.fund_flow.main_net_yi) : '数据缺失'}
+              </div>
+            </div>
+            <div className="rounded bg-gray-900/70 px-2 py-1.5">
+              <div className="text-gray-600">行业资金</div>
+              <div className={pctClass(s.sector?.net_in_yi)}>{fmtYi(s.sector?.net_in_yi)}</div>
+            </div>
+            <div className="rounded bg-gray-900/70 px-2 py-1.5">
+              <div className="text-gray-600">行业广度</div>
+              <div className="text-gray-300">{s.sector?.breadth_pct == null ? '--' : `${s.sector.breadth_pct.toFixed(1)}%`}</div>
+            </div>
+            <div className="rounded bg-gray-900/70 px-2 py-1.5">
+              <div className="text-gray-600">盘中资金变化</div>
+              <div className={pctClass(s.sector?.fund_change?.net_in_change_yi)}>{fmtYi(s.sector?.fund_change?.net_in_change_yi)}</div>
+            </div>
           </div>
           {s.logic && <div className="mt-1.5 text-xs leading-5 text-gray-400">{s.logic}</div>}
         </div>
@@ -695,12 +786,18 @@ function WatchlistDecisionPanel({ items }: { items?: Stock[] }) {
                     <span className="rounded bg-gray-900 px-2 py-0.5 text-[11px] font-bold">{decision.action}</span>
                   </div>
                   <div className="mt-0.5 text-[11px] text-gray-500">
-                    {stock.symbol} · 决策 {decision.score ?? '--'}分 · 覆盖 {stock.decision?.coverage ?? '--'}% · 量比 {t.vol ? t.vol.toFixed(2) : '--'}
+                    {stock.symbol} · {stock.industry || '行业待识别'} · 决策 {decision.score ?? '--'}分 · 覆盖 {stock.decision?.coverage ?? '--'}% · 量比 {t.vol ? t.vol.toFixed(2) : '--'}
                   </div>
                 </div>
                 <div className={`shrink-0 font-mono text-sm font-bold ${pctClass(stockPct(stock))}`}>{fmtPct(stockPct(stock))}</div>
               </div>
               <div className="mt-1.5 text-xs leading-5 text-gray-300">{decision.reason}</div>
+              <div className="mt-1 text-[11px] text-gray-500">
+                个股主力 {stock.fund_flow?.available ? fmtYi(stock.fund_flow.main_net_yi) : '数据缺失'}
+                {' · '}行业资金 {fmtYi(stock.sector?.net_in_yi)}
+                {' · '}行业广度 {stock.sector?.breadth_pct == null ? '--' : `${stock.sector.breadth_pct.toFixed(1)}%`}
+                {' · '}盘中变化 {fmtYi(stock.sector?.fund_change?.net_in_change_yi)}
+              </div>
               {!!stock.decision?.dimensions?.length && (
                 <div className="mt-1 text-[11px] text-gray-500">
                   {stock.decision.dimensions.slice(0, 5).map(d => `${d.label}${d.score}`).join(' · ')}
@@ -714,27 +811,6 @@ function WatchlistDecisionPanel({ items }: { items?: Stock[] }) {
   )
 }
 
-function WatchlistExecutionPlan({ items }: { items?: Stock[] }) {
-  if (!items?.length) return null
-  const rows = items.map(s => ({ stock: s, decision: decideStock(s) })).sort((a, b) => a.decision.rank - b.decision.rank)
-  const attack = rows.filter(x => ['重点进攻', '保留但不追'].includes(x.decision.action)).map(x => x.stock.name || x.stock.symbol)
-  const backup = rows.filter(x => x.decision.action === '保留').map(x => x.stock.name || x.stock.symbol)
-  const cut = rows.filter(x => ['降级', '剔除'].includes(x.decision.action)).map(x => `${x.stock.name || x.stock.symbol}（${x.decision.action}）`)
-  const lines = [
-    attack.length ? `主攻名单：${attack.join('、')}。只允许这些票进入明日盘中验证。` : '主攻名单：空。自选池没有达到进攻标准的票，明日不从自选里主动开新仓。',
-    backup.length ? `备选名单：${backup.join('、')}。只看强承接，不追高，不占主仓位。` : '备选名单：空。没有结构完整但进攻不足的缓冲标的。',
-    cut.length ? `清理名单：${cut.join('、')}。这些票不参与明日主计划。` : '清理名单：空。当前自选没有必须剔除或降级的票。',
-  ]
-  return (
-    <div className="rounded-lg border border-blue-900/40 bg-blue-950/10 p-3">
-      <div className="mb-2 text-sm font-bold text-blue-200">明日执行</div>
-      <ul className="space-y-2 text-xs leading-5 text-gray-300">
-        {lines.map((line, i) => <li key={i} className="rounded bg-gray-950/60 px-3 py-2">{line}</li>)}
-      </ul>
-    </div>
-  )
-}
-
 function IndustryList({ items, empty }: { items?: Industry[]; empty: string }) {
   if (!items?.length) return <div className="text-sm text-gray-500">{empty}</div>
   return (
@@ -744,8 +820,55 @@ function IndustryList({ items, empty }: { items?: Industry[]; empty: string }) {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm text-gray-100"><span className="truncate">{x.name}</span><span className="text-[11px] font-semibold text-blue-300">{x.decision?.action || '待判断'}</span></div>
             <div className="mt-0.5 text-[11px] leading-4 text-gray-600">{x.decision?.summary || `领涨：${x.leader || '--'}`}</div>
+            <div className="mt-1 text-[11px] leading-4 text-gray-500">
+              资金 {fmtYi(x.net_in_yi)} · 盘中变化 {fmtYi(x.fund_change?.net_in_change_yi)} · 上涨广度 {x.breadth_pct == null ? '--' : `${x.breadth_pct.toFixed(1)}%`} · 龙头 {x.leader || '--'}
+            </div>
           </div>
           <div className="shrink-0 text-right"><div className="text-sm font-semibold text-blue-300">{x.decision?.score ?? '--'}分</div><div className={`text-xs ${pctClass(x.pct_num)}`}>{x.pct || fmtPct(x.pct_num)}</div></div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function RiskOpportunityList({ items, empty }: { items?: (string | RiskOpportunityItem)[]; empty: string }) {
+  if (!items?.length) return <div className="rounded-md bg-gray-950/60 px-3 py-2 text-sm text-gray-500">{empty}</div>
+  return (
+    <div className="space-y-2">
+      {items.map((item, index) => typeof item === 'string' ? (
+        <div key={index} className="rounded-md bg-gray-950/60 px-3 py-2 text-sm text-gray-300">{item}</div>
+      ) : (
+        <div key={`${item.title}-${index}`} className="rounded-md border border-gray-800 bg-gray-950/60 px-3 py-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-white">{item.title || '待判断'}</span>
+            {item.industry && <span className="rounded bg-blue-950/60 px-2 py-0.5 text-[11px] text-blue-300">{item.industry}</span>}
+          </div>
+          {!!stockRefs(item.stocks) && <div className="mt-1 text-xs text-gray-300">对应股票：{stockRefs(item.stocks)}</div>}
+          {item.evidence && <div className="mt-1 text-xs leading-5 text-gray-500">证据：{item.evidence}</div>}
+          {item.action && <div className="mt-1 text-xs font-semibold leading-5 text-blue-300">动作：{item.action}</div>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TomorrowWatchList({ items }: { items?: (string | TomorrowWatchItem)[] }) {
+  if (!items?.length) return <div className="rounded-md bg-gray-950/60 px-3 py-2 text-sm text-gray-500">暂无明确关注项</div>
+  return (
+    <div className="space-y-2">
+      {items.map((item, index) => typeof item === 'string' ? (
+        <div key={index} className="rounded-md bg-gray-950/60 px-3 py-2 text-sm text-gray-300">{item}</div>
+      ) : (
+        <div key={`${item.theme}-${index}`} className="rounded-md border border-gray-800 bg-gray-950/60 px-3 py-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-white">{item.theme || '明日验证'}</span>
+            {item.industry && <span className="rounded bg-blue-950/60 px-2 py-0.5 text-[11px] text-blue-300">{item.industry}</span>}
+          </div>
+          {!!stockRefs(item.stocks) && <div className="mt-1 text-xs text-gray-300">对应股票：{stockRefs(item.stocks)}</div>}
+          {item.evidence && <div className="mt-1 text-xs leading-5 text-gray-500">今日证据：{item.evidence}</div>}
+          {item.trigger && <div className="mt-1 text-xs leading-5 text-red-300">触发：{item.trigger}</div>}
+          {item.invalidation && <div className="mt-1 text-xs leading-5 text-emerald-300">失效：{item.invalidation}</div>}
+          {item.action && <div className="mt-1 text-xs font-semibold leading-5 text-blue-300">动作：{item.action}</div>}
         </div>
       ))}
     </div>
@@ -1737,7 +1860,7 @@ export default function TodayReviewPage() {
             setRankTab={setRankTab}
           />
 
-          <ReviewSection index="02" title="持仓复盘" aside="账户盈亏、逐只持仓逻辑、风险动作">
+          <ReviewSection index="02" title="持仓复盘" aside="账户归因、个股资金、行业资金、唯一动作">
             <div className="space-y-3">
               <AnalysisMarkdown text={a?.portfolio_review} title="持仓逻辑判断" />
               <p className="text-sm leading-6 text-gray-300">{p?.conclusion}</p>
@@ -1761,14 +1884,14 @@ export default function TodayReviewPage() {
             )}
           </ReviewSection>
 
-          <ReviewSection index="03" title="自选复盘" aside="明确裁决、该留该剔、次日动作">
+          <ReviewSection index="03" title="自选复盘" aside="技术量价、个股资金、行业环境、明确裁决">
             <div className="space-y-3">
+              <AnalysisMarkdown text={a?.watchlist_review} title="AI 自选深度复盘" />
               <WatchlistDecisionPanel items={w?.stocks?.length ? w.stocks : w?.top_winners} />
-              <WatchlistExecutionPlan items={w?.stocks?.length ? w.stocks : w?.top_winners} />
             </div>
           </ReviewSection>
 
-          <ReviewSection index="04" title="行业板块复盘" aside="领涨领跌、主线轮动、持续性判断">
+          <ReviewSection index="04" title="行业板块复盘" aside="涨跌广度、资金变化、龙头承接、轮动阶段">
             <div className="space-y-3">
               <AnalysisMarkdown text={a?.industry_review} title="行业逻辑判断" />
               <p className="text-sm leading-6 text-gray-300">{ind?.conclusion}</p>
@@ -1800,29 +1923,21 @@ export default function TodayReviewPage() {
             </div>
           </ReviewSection>
 
-          <ReviewSection index="06" title="风险与机会" aside="风险提示、机会线索、仓位警惕">
+          <ReviewSection index="06" title="风险与机会" aside="行业方向、对应股票、关键证据、唯一动作">
             <div className="space-y-3">
               <div>
                 <div className="mb-2 text-xs font-medium text-emerald-300">风险</div>
-                <ul className="space-y-2 text-sm text-gray-300">
-                  {(data.risk_opportunity?.risks ?? ['暂无突出风险']).map((x, i) => <li key={i} className="rounded-md bg-gray-950/60 px-3 py-2">{x}</li>)}
-                </ul>
+                <RiskOpportunityList items={data.risk_opportunity?.risks} empty="暂无突出风险" />
               </div>
               <div>
                 <div className="mb-2 text-xs font-medium text-red-300">机会</div>
-                <ul className="space-y-2 text-sm text-gray-300">
-                  {(data.risk_opportunity?.opportunities ?? ['暂无突出机会']).map((x, i) => <li key={i} className="rounded-md bg-gray-950/60 px-3 py-2">{x}</li>)}
-                </ul>
+                <RiskOpportunityList items={data.risk_opportunity?.opportunities} empty="暂无突出机会" />
               </div>
             </div>
           </ReviewSection>
 
-          <ReviewSection index="07" title="明日关注" aside="次日开盘、主线延续、持仓自选动作">
-            <ul className="space-y-2 text-sm text-gray-300">
-              {(data.tomorrow_watch ?? []).length
-                ? data.tomorrow_watch!.map((x, i) => <li key={i} className="rounded-md bg-gray-950/60 px-3 py-2">{x}</li>)
-                : <li className="rounded-md bg-gray-950/60 px-3 py-2">暂无明确关注项</li>}
-            </ul>
+          <ReviewSection index="07" title="明日关注" aside="行业、板块、具体股票、触发与失效条件">
+            <TomorrowWatchList items={data.tomorrow_watch} />
           </ReviewSection>
         </div>
       ) : null}

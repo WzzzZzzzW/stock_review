@@ -26,7 +26,9 @@ def _pct_label(v: float) -> str:
 
 def _compact_json(obj: Any, limit: int = 12000) -> str:
     text = json.dumps(obj, ensure_ascii=False, default=str)
-    return text[:limit]
+    # 不能直接截断 JSON，否则后半段的持仓/自选会消失且整体不再是合法结构。
+    # 调用方应先裁剪字段；这里宁可保留完整证据，也不向模型发送残缺对象。
+    return text
 
 
 def _md_list(items: list[str]) -> str:
@@ -92,17 +94,42 @@ def _stock_logic(stock: dict) -> str:
         parts.append(f"换手 {turn}%")
     if tags:
         parts.append("信号：" + "、".join(tags[:4]))
+    fund = stock.get("fund_flow") or {}
+    if fund.get("available"):
+        main_net = _safe_float(fund.get("main_net_yi"))
+        main_pct = fund.get("main_net_pct")
+        parts.append(
+            f"个股主力净额推算 {main_net:+.2f} 亿"
+            + (f"、占比 {_safe_float(main_pct):+.2f}%" if main_pct is not None else "")
+        )
+    else:
+        parts.append("个股主力净额暂不可用，不据此推断资金方向")
+    sector = stock.get("sector") or {}
+    if sector:
+        sector_name = stock.get("industry") or sector.get("name") or "所属行业"
+        sector_net = sector.get("net_in_yi")
+        sector_flow = sector.get("fund_change") or {}
+        sector_text = f"{sector_name}涨跌 {_safe_float(sector.get('pct_num')):+.2f}%"
+        if sector.get("breadth_pct") is not None:
+            sector_text += f"、上涨广度 {_safe_float(sector.get('breadth_pct')):.1f}%"
+        if sector_net is not None:
+            sector_text += f"、净流入推算 {_safe_float(sector_net):+.2f} 亿"
+        if sector_flow.get("net_in_change_yi") is not None:
+            sector_text += f"、盘中净流入变化 {_safe_float(sector_flow.get('net_in_change_yi')):+.2f} 亿"
+        if sector.get("leader") and sector.get("leader") != "--":
+            sector_text += f"、领涨股 {sector.get('leader')}"
+        parts.append(sector_text)
     return "；".join(parts) + "。"
 
 
-def _stock_decision(stock: dict) -> dict:
+def _stock_decision(stock: dict, purpose: str = "watchlist") -> dict:
     from services.verdict_service import compute_quick_decision
 
     decision = compute_quick_decision(
         stock,
         stock.get("tech") or {},
         stock.get("decision_context") or {},
-        purpose="watchlist",
+        purpose=purpose,
     )
     decision["reason"] = decision["summary"]
     return decision
@@ -143,25 +170,47 @@ def _build_market(trade_date: str, progress_cb=None) -> dict:
         return {"summary": f"市场复盘暂不可用：{e}", "error": str(e)}
 
 
-def _build_portfolio(progress_cb=None) -> dict:
+def _build_portfolio(trade_date: str, evidence: dict, progress_cb=None) -> dict:
     if progress_cb:
         progress_cb("整理持仓复盘...")
     try:
-        from api.portfolio import _load_store, _fetch_quotes, _enrich_position, _empty_summary
+        from api.portfolio import (
+            _build_daily_trade_flows,
+            _empty_summary,
+            _enrich_position,
+            _fetch_quotes,
+            _load_store,
+        )
 
-        positions = (_load_store().get("positions") or [])
+        store = _load_store()
+        positions = store.get("positions") or []
         if not positions:
             return {"summary": _empty_summary(), "positions": [], "alerts": [], "conclusion": "暂无持仓。"}
 
         symbols = [p["symbol"] for p in positions]
         quotes = _fetch_quotes(symbols)
         techs = _tech_map(symbols)
+        trade_flows = _build_daily_trade_flows(store.get("trades", []), trade_date)
+        stock_evidence = evidence.get("by_symbol") or {}
         enriched = []
         alerts = []
         total_cost = total_value = today_pnl = 0.0
         for p in positions:
-            ep = _enrich_position(p, quotes.get(p["symbol"], {}))
+            ep = _enrich_position(p, quotes.get(p["symbol"], {}), trade_flows.get(p["symbol"]))
             ep["tech"] = techs.get(p["symbol"], {})
+            attached = stock_evidence.get(p["symbol"]) or {}
+            ep["industry"] = attached.get("industry", "")
+            ep["sector"] = attached.get("sector") or {}
+            ep["fund_flow"] = attached.get("fund_flow") or {}
+            ep["decision_context"] = {
+                "sector": ep["industry"],
+                "sector_decision": (ep["sector"].get("decision") or {}),
+                "main_net_yi": ep["fund_flow"].get("main_net_yi"),
+                "main_net_pct": ep["fund_flow"].get("main_net_pct"),
+                "stop_loss": p.get("stop_loss"),
+                "target_price": p.get("target_price"),
+            }
+            ep["decision"] = _stock_decision(ep, purpose="position")
             ep["logic"] = _stock_logic(ep)
             enriched.append(ep)
             total_cost += ep.get("cost_value", 0)
@@ -212,7 +261,12 @@ def _normalize_watchlist(watchlist: list[dict] | None) -> list[dict]:
     return out
 
 
-def _build_watchlist(watchlist: list[dict] | None, progress_cb=None) -> dict:
+def _build_watchlist(
+    watchlist: list[dict] | None,
+    trade_date: str,
+    evidence: dict,
+    progress_cb=None,
+) -> dict:
     if progress_cb:
         progress_cb("整理自选复盘...")
     items = _normalize_watchlist(watchlist)
@@ -223,18 +277,10 @@ def _build_watchlist(watchlist: list[dict] | None, progress_cb=None) -> dict:
         symbols = [x["code"] for x in items]
         quotes = _fetch_sina_hq(symbols)
         techs = _tech_map(symbols)
-        industry_map: dict[str, str] = {}
-        sector_decisions: dict[str, dict] = {}
+        stock_evidence = evidence.get("by_symbol") or {}
         market_pct = None
         try:
-            from data.stock_data import get_industry_map
-            from api.industry import industry_summary
             from api.daily_report import _fetch_indices
-            industry_map = get_industry_map(block=False)
-            sector_decisions = {
-                row.get("name", ""): row.get("decision") or {}
-                for row in industry_summary().get("industries", [])
-            }
             pcts = [x.get("pct") for x in _fetch_indices() if x.get("pct") is not None]
             market_pct = sum(pcts) / len(pcts) if pcts else None
         except Exception:
@@ -251,12 +297,17 @@ def _build_watchlist(watchlist: list[dict] | None, progress_cb=None) -> dict:
                 "turnover": q.get("turnover", 0),
                 "tech": techs.get(it["code"], {}),
             }
-            industry = industry_map.get(it["code"], "")
+            attached = stock_evidence.get(it["code"]) or {}
+            industry = attached.get("industry", "")
             row["industry"] = industry
+            row["sector"] = attached.get("sector") or {}
+            row["fund_flow"] = attached.get("fund_flow") or {}
             row["decision_context"] = {
                 "market_pct": market_pct,
                 "sector": industry,
-                "sector_decision": sector_decisions.get(industry) or {},
+                "sector_decision": (row["sector"].get("decision") or {}),
+                "main_net_yi": row["fund_flow"].get("main_net_yi"),
+                "main_net_pct": row["fund_flow"].get("main_net_pct"),
             }
             row["logic"] = _stock_logic(row)
             row["decision"] = _stock_decision(row)
@@ -293,13 +344,11 @@ def _build_watchlist(watchlist: list[dict] | None, progress_cb=None) -> dict:
         return {"summary": {"count": len(items)}, "stocks": items, "conclusion": f"自选复盘暂不可用：{e}", "error": str(e)}
 
 
-def _build_industry(progress_cb=None) -> dict:
+def _build_industry(evidence: dict, progress_cb=None) -> dict:
     if progress_cb:
         progress_cb("整理行业板块复盘...")
     try:
-        from api.industry import industry_summary
-        data = industry_summary()
-        industries = data.get("industries", [])
+        industries = evidence.get("sectors") or []
         top_up = sorted(industries, key=lambda x: (x.get("decision") or {}).get("score", 50), reverse=True)[:8]
         top_down = sorted(industries, key=lambda x: (x.get("decision") or {}).get("score", 50))[:8]
         hot = [x for x in top_up if (x.get("decision") or {}).get("action") in ("主线候选", "轮动观察")]
@@ -309,7 +358,8 @@ def _build_industry(progress_cb=None) -> dict:
             f"明确回避：{'、'.join(x.get('name', '') for x in cold[:3]) or '暂无'}",
         ])
         return {
-            "updated_at": data.get("updated_at", ""),
+            "updated_at": evidence.get("updated_at", ""),
+            "fund_basis": evidence.get("basis", ""),
             "top_up": top_up,
             "top_down": top_down,
             "conclusion": conclusion,
@@ -358,43 +408,70 @@ def _build_international(progress_cb=None) -> dict:
 
 
 def _build_extra(market: dict, portfolio: dict, watchlist: dict, industry: dict, international: dict) -> dict:
+    def refs(rows: list[dict]) -> list[dict]:
+        return [
+            {"symbol": str(row.get("symbol") or ""), "name": str(row.get("name") or "")}
+            for row in rows if row.get("name") or row.get("symbol")
+        ]
+
+    personal = (portfolio.get("positions") or []) + (watchlist.get("stocks") or [])
+
+    def sector_refs(sector: dict, fallback_rows: list[dict]) -> list[dict]:
+        name = sector.get("name")
+        matched = [row for row in personal if row.get("industry") == name]
+        leader = str(sector.get("leader") or "")
+        if leader and leader != "--" and all(row.get("name") != leader for row in matched):
+            matched.append({"symbol": "", "name": leader})
+        return refs(matched[:4] or fallback_rows[:3])
+
     risks = []
+    for sector in (industry.get("top_down") or [])[:3]:
+        risks.append({
+            "title": f"{sector.get('name')}资金与价格承压",
+            "industry": sector.get("name", ""),
+            "stocks": sector_refs(sector, market.get("laggards") or []),
+            "evidence": (
+                f"行业涨跌 {_safe_float(sector.get('pct_num')):+.2f}%，"
+                f"净流入推算 {_safe_float(sector.get('net_in_yi')):+.2f} 亿，"
+                f"上涨广度 {_safe_float(sector.get('breadth_pct')):.1f}%。"
+            ),
+            "action": "回避弱势行业，相关持仓和自选统一降级。",
+        })
+
     opportunities = []
-
-    sentiment = market.get("sentiment", {}) or {}
-    limit_stats = market.get("limit_stats", {}) or {}
-    score = int(sentiment.get("score", 0) or 0)
-    if score >= 72:
-        risks.append("市场情绪偏热，追高和炸板风险前置收紧。")
-    elif score <= 35:
-        risks.append("市场情绪偏冷，仓位和试错频率要收紧。")
-    if _safe_float(limit_stats.get("broken_ratio")) >= 30:
-        risks.append(f"炸板率 {limit_stats.get('broken_ratio')}%，短线接力分歧偏大。")
-    for a in (portfolio.get("alerts") or [])[:3]:
-        risks.append(a.get("text", ""))
-
-    top_ind = (industry.get("top_up") or [])[:3]
-    if top_ind:
-        opportunities.append("强势行业：" + "、".join(x.get("name", "") for x in top_ind))
-    leaders = (market.get("leaders") or [])[:3]
-    if leaders:
-        opportunities.append("市场强势股：" + "、".join(x.get("name", "") for x in leaders))
-    wtop = (watchlist.get("top_winners") or [])[:3]
-    if wtop:
-        opportunities.append("自选强势股：" + "、".join(x.get("name", "") for x in wtop))
+    for sector in (industry.get("top_up") or [])[:3]:
+        opportunities.append({
+            "title": f"{sector.get('name')}通过多维主线初筛",
+            "industry": sector.get("name", ""),
+            "stocks": sector_refs(sector, market.get("leaders") or []),
+            "evidence": (
+                f"行业涨跌 {_safe_float(sector.get('pct_num')):+.2f}%，"
+                f"净流入推算 {_safe_float(sector.get('net_in_yi')):+.2f} 亿，"
+                f"上涨广度 {_safe_float(sector.get('breadth_pct')):.1f}%，"
+                f"领涨股 {sector.get('leader') or '--'}。"
+            ),
+            "action": "只跟踪龙头承接和板块扩散，不追后排。",
+        })
 
     tomorrow = []
-    if top_ind:
-        tomorrow.append("开盘后只做延续性最强的领涨行业；龙头断板或板块掉出涨幅前列，直接放弃追击。")
-    if limit_stats.get("max_continuity"):
-        tomorrow.append(f"最高 {limit_stats.get('max_continuity')} 连板梯队不晋级就降低短线接力权重，晋级才保留进攻仓位。")
-    if international.get("items"):
-        tomorrow.append("国际热点只看开盘直接映射的行业；没有高开承接和成交放大，就不纳入交易计划。")
+    for sector in (industry.get("top_up") or [])[:4]:
+        tomorrow.append({
+            "theme": f"验证{sector.get('name')}是否延续",
+            "industry": sector.get("name", ""),
+            "stocks": sector_refs(sector, market.get("leaders") or []),
+            "evidence": (
+                f"收盘净流入推算 {_safe_float(sector.get('net_in_yi')):+.2f} 亿，"
+                f"上涨广度 {_safe_float(sector.get('breadth_pct')):.1f}%。"
+            ),
+            "trigger": "行业继续位于强度前列，资金、广度和龙头承接至少三项同向。",
+            "invalidation": "行业净流入转负、广度跌破55%或龙头失去承接，任一发生即取消。",
+            "action": "满足触发条件才进入盘中验证，否则放弃。",
+        })
 
     return {
         "risk_opportunity": {
-            "risks": [x for x in risks if x][:6],
-            "opportunities": [x for x in opportunities if x][:6],
+            "risks": risks[:6],
+            "opportunities": opportunities[:6],
         },
         "tomorrow_watch": tomorrow[:6],
     }
@@ -572,6 +649,176 @@ def _fallback_analysis(
     }
 
 
+def _stock_ai_payload(stock: dict) -> dict:
+    """保留模型真正需要的证据，避免完整技术对象挤掉资金和板块上下文。"""
+    tech = stock.get("tech") or {}
+    return {
+        "symbol": stock.get("symbol"),
+        "name": stock.get("name"),
+        "industry": stock.get("industry"),
+        "price": stock.get("current_price", stock.get("price")),
+        "pct_change": stock.get("pct_change"),
+        "today_pnl": stock.get("today_pnl"),
+        "pnl_pct": stock.get("pnl_pct"),
+        "turnover": stock.get("turnover"),
+        "technical": tech.get("technical") or {},
+        "trend": tech.get("trend") or {},
+        "today": tech.get("today") or {},
+        "fund_flow": stock.get("fund_flow") or {},
+        "sector": stock.get("sector") or {},
+        "decision": stock.get("decision") or {},
+        "logic_evidence": stock.get("logic"),
+    }
+
+
+def _market_stock_ai_payload(stock: dict) -> dict:
+    return {
+        "symbol": stock.get("symbol") or stock.get("code"),
+        "name": stock.get("name"),
+        "industry": stock.get("industry"),
+        "pct_change": stock.get("pct_change", stock.get("pct")),
+        "amount_yi": stock.get("amount_yi"),
+        "turnover": stock.get("turnover"),
+    }
+
+
+def _market_ai_payload(market: dict) -> dict:
+    limits = market.get("limit_stats") or {}
+    rankings = market.get("rankings") or {}
+    sectors = market.get("sectors") or {}
+    return {
+        "summary": market.get("summary"),
+        "sentiment": market.get("sentiment"),
+        "breadth": market.get("breadth"),
+        "indices": market.get("indices"),
+        "amount": market.get("amount"),
+        "limit_stats": {
+            key: limits.get(key) for key in (
+                "zt_count", "dt_count", "broken_count", "broken_ratio",
+                "max_continuity", "ladder", "zt_by_industry", "dt_stocks",
+            )
+        },
+        "sectors": {
+            "top_up": (sectors.get("top_up") or [])[:10],
+            "top_down": (sectors.get("top_down") or [])[:10],
+        },
+        "rankings": {
+            key: [_market_stock_ai_payload(row) for row in (rankings.get(key) or [])[:12]]
+            for key in ("gainers", "losers", "amount", "turnover")
+        },
+        "news": [
+            {key: row.get(key) for key in ("title", "summary", "source", "published")}
+            for row in (market.get("news") or [])[:10]
+        ],
+    }
+
+
+def _intelligence_ai_payload(intelligence: dict) -> dict:
+    learning = intelligence.get("learning") or {}
+    mainline = intelligence.get("mainline_analysis") or {}
+    return {
+        "verdict": intelligence.get("verdict"),
+        "final_conclusion": intelligence.get("final_conclusion"),
+        "core_judgements": (intelligence.get("core_judgements") or [])[:4],
+        "historical_context": intelligence.get("historical_context"),
+        "intraday_path": intelligence.get("intraday_path"),
+        "undercurrents": (intelligence.get("undercurrents") or [])[:8],
+        "mainline_analysis": {
+            "rotation_summary": mainline.get("rotation_summary"),
+            "rows": (mainline.get("rows") or [])[:8],
+            "themes": (mainline.get("themes") or [])[:6],
+        },
+        "learning": {
+            key: learning.get(key) for key in (
+                "state", "label", "valid_outcomes", "minimum_samples",
+                "effective_version", "latest_audit", "next_action",
+            )
+        },
+        "tomorrow_plan": intelligence.get("tomorrow_plan"),
+        "data_notes": intelligence.get("data_notes"),
+    }
+
+
+def _industry_ai_payload(industry: dict) -> dict:
+    keys = (
+        "name", "pct", "pct_num", "up_count", "down_count", "breadth_pct",
+        "net_in", "net_in_yi", "fund_change", "leader", "decision",
+    )
+    return {
+        "conclusion": industry.get("conclusion"),
+        "fund_basis": industry.get("fund_basis"),
+        "top_up": [{key: row.get(key) for key in keys} for row in (industry.get("top_up") or [])[:10]],
+        "top_down": [{key: row.get(key) for key in keys} for row in (industry.get("top_down") or [])[:10]],
+    }
+
+
+def _contains_all_stocks(text: str, stocks: list[dict]) -> bool:
+    return all(
+        (str(row.get("name") or "") and str(row.get("name")) in text)
+        or (str(row.get("symbol") or "") and str(row.get("symbol")) in text)
+        for row in stocks
+    )
+
+
+def _allowed_stock_refs(market: dict, portfolio: dict, watchlist: dict, industry: dict) -> tuple[set[str], set[str]]:
+    rows = list(portfolio.get("positions") or []) + list(watchlist.get("stocks") or [])
+    rankings = market.get("rankings") or {}
+    for key in ("gainers", "losers", "amount", "turnover"):
+        rows.extend(rankings.get(key) or [])
+    rows.extend((market.get("limit_stats") or {}).get("dt_stocks") or [])
+    names = {str(row.get("name")) for row in rows if row.get("name")}
+    symbols = {str(row.get("symbol") or row.get("code")) for row in rows if row.get("symbol") or row.get("code")}
+    for row in (industry.get("top_up") or []) + (industry.get("top_down") or []):
+        if row.get("leader") and row.get("leader") != "--":
+            names.add(str(row.get("leader")))
+    return symbols, names
+
+
+def _valid_structured_stock_items(items: list, symbols: set[str], names: set[str]) -> bool:
+    for item in items:
+        if not isinstance(item, dict):
+            return False
+        refs = item.get("stocks")
+        if not isinstance(refs, list) or not refs:
+            return False
+        for ref in refs:
+            if not isinstance(ref, dict):
+                return False
+            symbol = str(ref.get("symbol") or "")
+            name = str(ref.get("name") or "")
+            if symbol not in symbols and name not in names:
+                return False
+    return True
+
+
+def _repair_stock_review(client, model: str, label: str, stocks: list[dict]) -> str:
+    names = "、".join(str(row.get("name") or row.get("symbol")) for row in stocks)
+    prompt = f"""
+你是激进但理性的 A 股复盘助手。上一轮「{label}」漏掉了股票，现在必须单独重写。
+
+必须分析且一个都不能少：{names}。
+只分析输入名单，禁止加入名单外股票。输出 markdown 正文，不要 JSON。
+先给唯一的整体裁决，再逐只股票写一个 `### 股票名（代码）` 小标题。
+每只必须交叉使用：自身趋势量价、个股资金、所属行业涨跌与广度、行业资金及盘中变化、相对行业/市场强弱。
+若 fund_flow.available=false，明确写“个股资金数据缺失”，禁止伪造流入流出；行业净流入必须标明为数据商推算口径。
+每只最后必须给唯一动作：进攻、保留但不追、降级或剔除。不得把正反理由列完后让用户自己选。
+最后给明日执行顺序和每只股票的触发/失效条件。不要承诺收益。
+
+数据：
+{_compact_json([_stock_ai_payload(row) for row in stocks], 50000)}
+"""
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.25,
+        max_tokens=7000,
+        tools=[],
+        thinking={"type": "disabled"},
+        timeout=180,
+    )
+    return (response.choices[0].message.content or "").strip()
+
+
 def _build_ai_block_analysis(
     market: dict,
     portfolio: dict,
@@ -582,50 +829,47 @@ def _build_ai_block_analysis(
     progress_cb=None,
 ) -> dict:
     if progress_cb:
-        progress_cb("AI 生成五大复盘分析...")
+        progress_cb("AI 综合生成七大复盘模块...")
     fallback = _fallback_analysis(market, portfolio, watchlist, industry, international, intelligence)
+    fallback.update(_build_extra(market, portfolio, watchlist, industry, international))
     fallback["source"] = "deterministic"
-    fallback["source_label"] = "多维规则引擎"
+    fallback["source_label"] = "AI失败后的数据兜底"
     try:
         from services.ai_client import make_client, CHAT_MODEL
 
         payload = {
-            "market": {
-                "summary": market.get("summary"),
-                "sentiment": market.get("sentiment"),
-                "breadth": market.get("breadth"),
-                "limit_stats": market.get("limit_stats"),
-                "indices": market.get("indices"),
-                "sectors": market.get("sectors"),
-                "rankings": market.get("rankings"),
-                "news": market.get("news"),
-            },
-            "postmarket_intelligence": intelligence,
             "portfolio": {
                 "summary": portfolio.get("summary"),
-                "positions": portfolio.get("positions"),
+                "positions": [_stock_ai_payload(row) for row in (portfolio.get("positions") or [])],
                 "analysis_points": portfolio.get("analysis_points"),
                 "alerts": portfolio.get("alerts"),
             },
             "watchlist": {
                 "summary": watchlist.get("summary"),
-                "stocks": watchlist.get("stocks"),
+                "stocks": [_stock_ai_payload(row) for row in (watchlist.get("stocks") or [])],
                 "analysis_points": watchlist.get("analysis_points"),
-                "decisions": watchlist.get("decisions"),
             },
-            "industry": industry,
-            "international": international,
+            "industry": _industry_ai_payload(industry),
+            "market": _market_ai_payload(market),
+            "postmarket_intelligence": _intelligence_ai_payload(intelligence),
+            "international": {
+                "conclusion": international.get("conclusion"),
+                "items": (international.get("items") or [])[:8],
+            },
         }
         prompt = f"""
 你是一个激进但理性的 A 股交易复盘助手。用户要看的不是数据罗列，而是市场表面之下正在发生的结构变化。
 
-请基于下面 JSON，分别输出五个模块的 markdown 分析。必须严格返回 JSON 对象，键名固定：
-market_review, portfolio_review, watchlist_review, industry_review, international_review。
+请把全部证据放在同一个推理过程中交叉验证，输出七个模块。必须严格返回 JSON 对象，键名固定：
+market_review, portfolio_review, watchlist_review, industry_review, international_review,
+risk_opportunity, tomorrow_watch。
 
-每个值都是 markdown 字符串，要求：
-- 每个模块 350-700 字，分 3-5 个 `###` 小标题。
+前五个值是 markdown 字符串，要求：
+- 每个模块 350-850 字，分 3-5 个 `###` 小标题；不要对每只股票机械复用相同句式，要根据各自证据写出不同的核心矛盾。
 - 必须分析「涨跌逻辑」「量价逻辑」「结构/主线」「风险」「明日动作」中与该模块相关的内容。
-- 持仓和自选必须逐只解释，不要只说总盈亏；要结合 pct_change、vol_ratio、MA5/MA20/MA60、MACD、换手、标签。
+- 持仓和自选必须逐只解释，不要只说总盈亏；每只都要同时使用四类证据：自身趋势量价、个股资金、所属行业资金与广度、相对行业/市场强弱。
+- 个股 fund_flow.available=false 时，必须明确写“个股资金数据缺失”，只能使用成交额、换手和量比判断活跃度，禁止伪造净流入方向。
+- sector.net_in_yi 与 fund_change 是数据商推算口径，必须写“推算”或“资金口径显示”，不能写成真实机构买卖事实。
 - 所有判断点必须给唯一动作结论，例如「进攻 / 保留但不追 / 降级 / 剔除 / 收紧仓位」。禁止把正反理由都列出来让用户自己选。
 - 自选复盘必须先给“自选池裁决”：谁是第一顺位，谁剔除，谁降级；结论必须是动作，不得写成含糊建议。
 - 市场复盘要结合情绪温度、涨跌家数、涨停/跌停/炸板、指数、行业主线、个股榜单和新闻。
@@ -634,34 +878,95 @@ market_review, portfolio_review, watchlist_review, industry_review, internationa
 - 必须审计早段判断是否被收盘验证，不能只复述收盘涨跌幅。
 - 若 postmarket_intelligence.learning.latest_audit 存在，必须解释昨日仓位预算、主线判断和今日实际结果；若仍在 collecting 状态，只能写“积累样本”，禁止声称AI已经完成权重更新。
 - 持仓复盘要做账户归因：区分市场Beta、行业暴露、个股相对强弱和交易假设是否失效，给每只持仓唯一动作。
-- 行业板块要分析为什么这些行业强/弱、是否轮动、持续性怎么看。
+- 行业板块必须逐个结合涨跌、上涨广度、净流入、盘中净流入变化、龙头和涨停分布，判断是启动、扩散、高潮、分歧还是退潮。
 - 国际形势要写清楚国际事件映射到 A 股哪些方向，以及哪些方向纳入计划、哪些方向直接排除，不能只贴新闻标题。
 - 不要喊单，不要承诺收益；但必须激进且理性，给明确执行动作。
 
+risk_opportunity 必须是对象，结构严格为：
+{{"risks":[{{"title":"", "industry":"", "stocks":[{{"symbol":"", "name":""}}], "evidence":"", "action":""}}],
+"opportunities":[同样结构]}}。
+- 每条风险和机会必须同时给行业与对应股票，股票只能来自输入中的持仓、自选、行业龙头、涨跌停或成交额榜单，禁止编造代码和名称。
+- evidence 必须引用资金、广度、量价或龙头承接中的至少两项；action 给唯一动作。
+
+tomorrow_watch 必须是数组，每项结构严格为：
+{{"theme":"", "industry":"", "stocks":[{{"symbol":"", "name":""}}], "evidence":"", "trigger":"", "invalidation":"", "action":""}}。
+- 每项都必须有行业、具体股票、明日触发条件和失效条件；不能只写“关注某行业”。
+- 选出的股票必须有当日证据支撑，并说明是持仓、自选还是市场龙头。
+
 数据：
-{_compact_json(payload, 22000)}
+{_compact_json(payload, 80000)}
 """
         resp = make_client().chat.completions.create(
             model=CHAT_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.35,
-            max_tokens=6500,
+            max_tokens=9000,
             tools=[],
             thinking={"type": "disabled"},
             timeout=180,
         )
         parsed = _parse_json_obj(resp.choices[0].message.content or "")
         if not parsed:
-            fallback["error"] = "AI 未返回可解析的五模块 JSON，已使用多维规则引擎。"
+            fallback["error"] = "AI 未返回可解析的七模块 JSON，已使用数据兜底。"
             return fallback
         merged = dict(fallback)
-        for k, v in parsed.items():
-            text = str(v)
-            if len(text) >= 260:
-                merged[k] = text
-        merged["watchlist_review"] = _watchlist_review_text(watchlist)
+        validation_notes = []
+        repair_requests: list[tuple[str, str, list[dict]]] = []
+        for key in (
+            "market_review", "portfolio_review", "watchlist_review",
+            "industry_review", "international_review",
+        ):
+            text = parsed.get(key)
+            stocks = (
+                portfolio.get("positions") or [] if key == "portfolio_review"
+                else watchlist.get("stocks") or [] if key == "watchlist_review"
+                else []
+            )
+            covers_stocks = not stocks or (isinstance(text, str) and _contains_all_stocks(text, stocks))
+            if isinstance(text, str) and len(text.strip()) >= 260 and covers_stocks:
+                merged[key] = text.strip()
+            elif stocks and not covers_stocks:
+                label = "持仓复盘" if key == "portfolio_review" else "自选复盘"
+                repair_requests.append((key, label, stocks))
+        for key, label, stocks in repair_requests:
+            try:
+                if progress_cb:
+                    progress_cb(f"AI 补写完整{label}名单...")
+                repaired = _repair_stock_review(make_client(), CHAT_MODEL, label, stocks)
+                if len(repaired) >= 260 and _contains_all_stocks(repaired, stocks):
+                    merged[key] = repaired
+                else:
+                    validation_notes.append(f"{key} 补写后仍未覆盖完整名单，已使用数据兜底")
+            except Exception as repair_exc:
+                validation_notes.append(f"{key} 补写失败，已使用数据兜底：{repair_exc}")
+        allowed_symbols, allowed_names = _allowed_stock_refs(market, portfolio, watchlist, industry)
+        risk_opportunity = parsed.get("risk_opportunity")
+        if isinstance(risk_opportunity, dict):
+            risks = risk_opportunity.get("risks")
+            opportunities = risk_opportunity.get("opportunities")
+            if (
+                isinstance(risks, list) and isinstance(opportunities, list)
+                and _valid_structured_stock_items(risks, allowed_symbols, allowed_names)
+                and _valid_structured_stock_items(opportunities, allowed_symbols, allowed_names)
+            ):
+                merged["risk_opportunity"] = {
+                    "risks": risks[:6],
+                    "opportunities": opportunities[:6],
+                }
+            else:
+                validation_notes.append("风险与机会含未知股票或缺少股票，已使用数据兜底")
+        tomorrow_watch = parsed.get("tomorrow_watch")
+        if (
+            isinstance(tomorrow_watch, list) and tomorrow_watch
+            and _valid_structured_stock_items(tomorrow_watch, allowed_symbols, allowed_names)
+        ):
+            merged["tomorrow_watch"] = tomorrow_watch[:6]
+        elif tomorrow_watch:
+            validation_notes.append("明日关注含未知股票或缺少股票，已使用数据兜底")
         merged["source"] = "ai"
-        merged["source_label"] = "AI + 多维规则引擎"
+        merged["source_label"] = "大模型综合生成 · 数据证据约束"
+        if validation_notes:
+            merged["validation_notes"] = validation_notes
         return merged
     except Exception as e:
         fallback["error"] = str(e)
@@ -669,12 +974,38 @@ market_review, portfolio_review, watchlist_review, industry_review, internationa
 
 
 def build_today_review(trade_date: str, watchlist: list[dict] | None = None, progress_cb=None) -> dict:
+    normalized_watchlist = _normalize_watchlist(watchlist)
+    try:
+        from api.portfolio import _load_store
+
+        position_rows = _load_store().get("positions") or []
+        position_symbols = [
+            str(row.get("symbol") or "")
+            for row in position_rows
+            if row.get("symbol")
+        ]
+    except Exception:
+        position_rows = []
+        position_symbols = []
+    review_symbols = list(dict.fromkeys(
+        position_symbols + [row["code"] for row in normalized_watchlist]
+    ))
+    if progress_cb:
+        progress_cb("提取个股资金与所属行业资金证据...")
+    from services.review_evidence_service import build_review_evidence
+
+    stock_names = {
+        str(row.get("symbol") or ""): str(row.get("name") or "")
+        for row in position_rows if row.get("symbol")
+    }
+    stock_names.update({row["code"]: str(row.get("name") or "") for row in normalized_watchlist})
+    evidence = build_review_evidence(review_symbols, trade_date, stock_names)
     market = _build_market(trade_date, progress_cb)
-    portfolio = _build_portfolio(progress_cb)
-    watch = _build_watchlist(watchlist, progress_cb)
-    industry = _build_industry(progress_cb)
+    portfolio = _build_portfolio(trade_date, evidence, progress_cb)
+    watch = _build_watchlist(normalized_watchlist, trade_date, evidence, progress_cb)
+    industry = _build_industry(evidence, progress_cb)
     international = _build_international(progress_cb)
-    extra = _build_extra(market, portfolio, watch, industry, international)
+    fallback_extra = _build_extra(market, portfolio, watch, industry, international)
     if progress_cb:
         progress_cb("计算历史分位、盘中路径与市场暗流...")
     from services.postmarket_intelligence_service import build_postmarket_intelligence
@@ -694,6 +1025,8 @@ def build_today_review(trade_date: str, watchlist: list[dict] | None = None, pro
     analysis = _build_ai_block_analysis(
         market, portfolio, watch, industry, international, intelligence, progress_cb
     )
+    risk_opportunity = analysis.get("risk_opportunity") or fallback_extra["risk_opportunity"]
+    tomorrow_watch = analysis.get("tomorrow_watch") or fallback_extra["tomorrow_watch"]
 
     return {
         "trade_date": trade_date,
@@ -705,5 +1038,7 @@ def build_today_review(trade_date: str, watchlist: list[dict] | None = None, pro
         "international": international,
         "analysis": analysis,
         "intelligence": intelligence,
-        **extra,
+        "risk_opportunity": risk_opportunity,
+        "tomorrow_watch": tomorrow_watch,
+        "evidence_basis": evidence.get("basis", ""),
     }

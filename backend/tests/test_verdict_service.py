@@ -62,6 +62,13 @@ class MultiDimensionVerdictTests(unittest.TestCase):
         self.assertIn("breadth", keys)
         self.assertGreater(result["score"], 55)
 
+    def test_intraday_position_is_clamped_when_quote_sources_disagree(self):
+        quote = {"price": 12, "pct_change": 2, "open": 10, "high": 11, "low": 9}
+        result = compute_quick_decision(quote, _tech(), {})
+        intraday = next(d for d in result["dimensions"] if d["key"] == "intraday")
+        self.assertIn("100%", intraday["evidence"])
+        self.assertNotIn("150%", intraday["evidence"])
+
 
 if __name__ == "__main__":
     unittest.main()

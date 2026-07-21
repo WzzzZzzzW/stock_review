@@ -8,7 +8,10 @@
 import baostock as bs
 import pandas as pd
 import datetime
+import json
+import subprocess
 import threading
+from urllib.parse import urlencode
 
 from utils.fallback_log import report_data_fallback
 
@@ -727,6 +730,52 @@ def get_fund_flow(symbol: str) -> dict:
     return result
 
 
+def _fund_flow_from_eastmoney_curl(symbol: str, market: str) -> dict:
+    """requests 被数据源断开时，用系统 curl 读取同一公开 JSON 接口。"""
+    market_map = {"sh": 1, "sz": 0, "bj": 0}
+    params = {
+        "lmt": "5",
+        "klt": "101",
+        "secid": f"{market_map[market]}.{symbol}",
+        "fields1": "f1,f2,f3,f7",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+        "ut": "b2884a393a59ad64002292a3e90d46a5",
+    }
+    url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get?" + urlencode(params)
+    completed = subprocess.run(
+        ["curl", "-fsSL", "--max-time", "8", url],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    payload = json.loads(completed.stdout)
+    klines = ((payload.get("data") or {}).get("klines") or [])
+    if not klines:
+        return {}
+    values = str(klines[-1]).split(",")
+    if len(values) < 7:
+        return {}
+
+    def _num(index: int):
+        try:
+            value = float(values[index])
+            return None if value != value else value
+        except Exception:
+            return None
+
+    return {
+        "date": values[0][:10],
+        "main_net": _num(1),
+        "main_net_pct": _num(6),
+        "super_net": _num(5),
+        "big_net": _num(4),
+        "mid_net": _num(3),
+        "small_net": _num(2),
+        "source": "eastmoney_curl_fallback",
+    }
+
+
 def get_stock_fund_flow_day(symbol: str) -> dict:
     """
     单只股票最近一个交易日的资金流向（东财个股资金流，单股接口，秒级返回）。
@@ -739,14 +788,14 @@ def get_stock_fund_flow_day(symbol: str) -> dict:
             return None if (f != f) else f   # NaN guard
         except Exception:
             return None
+    if symbol.startswith("6"):
+        market = "sh"
+    elif symbol.startswith(("8", "4")):
+        market = "bj"
+    else:
+        market = "sz"
     try:
         import akshare as ak, io, sys
-        if symbol.startswith("6"):
-            market = "sh"
-        elif symbol.startswith(("8", "4")):
-            market = "bj"
-        else:
-            market = "sz"
         # 与 get_lhb/get_news 一致：直连东财，best-effort（失败→{}，前端显示"暂无"）。
         # 不动环境代理：用户本机若靠代理上网，擅自清代理反而会弄坏。
         old_stderr = sys.stderr
@@ -756,7 +805,7 @@ def get_stock_fund_flow_day(symbol: str) -> dict:
         finally:
             sys.stderr = old_stderr
         if df is None or df.empty:
-            return {}
+            return _fund_flow_from_eastmoney_curl(symbol, market)
         row = df.iloc[-1]
         return {
             "date":         str(row.get("日期", ""))[:10],
@@ -766,12 +815,20 @@ def get_stock_fund_flow_day(symbol: str) -> dict:
             "big_net":      _num(row.get("大单净流入-净额")),
             "mid_net":      _num(row.get("中单净流入-净额")),
             "small_net":    _num(row.get("小单净流入-净额")),
+            "source":       "akshare_eastmoney",
         }
     except Exception as exc:
         report_data_fallback(
             "akshare", "stock_fund_flow_day", exc, context={"symbol": symbol}
         )
-        return {}
+        try:
+            return _fund_flow_from_eastmoney_curl(symbol, market)
+        except Exception as fallback_exc:
+            report_data_fallback(
+                "eastmoney", "stock_fund_flow_day_curl", fallback_exc,
+                context={"symbol": symbol},
+            )
+            return {}
 
 
 # ── 新闻 & 公告（akshare，独立于 baostock）────────────────────────────

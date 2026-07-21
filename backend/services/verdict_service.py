@@ -153,7 +153,7 @@ def compute_quick_decision(
     low = _f(quote.get("low"), _f(today.get("low")))
     prev_close = _f(quote.get("prev_close"))
     if price and high and low and high > low:
-        close_pos = (price - low) / (high - low)
+        close_pos = max(0.0, min(1.0, (price - low) / (high - low)))
         intraday = 25 + close_pos * 50
         notes = [f"位于日内区间 {close_pos * 100:.0f}% 位置"]
         if open_p:
@@ -204,7 +204,9 @@ def compute_quick_decision(
     # 8. 可验证资金
     lhb = _f(context.get("lhb_amt"))
     north = _f(context.get("north_signal"))
-    if lhb is not None or north is not None:
+    main_net = _f(context.get("main_net_yi"))
+    main_net_pct = _f(context.get("main_net_pct"))
+    if lhb is not None or north is not None or main_net is not None:
         capital = 50
         notes = []
         if lhb is not None:
@@ -213,6 +215,12 @@ def compute_quick_decision(
         if north is not None:
             capital += max(-12, min(12, north * 12))
             notes.append(f"外资信号 {north:+.2f}")
+        if main_net is not None:
+            capital += max(-24, min(24, main_net * 2.5))
+            note = f"主力净额推算 {main_net:+.2f}亿"
+            if main_net_pct is not None:
+                note += f"、占比 {main_net_pct:+.2f}%"
+            notes.append(note)
         dimensions.append(_dim("capital", "资金验证", capital, "，".join(notes), 7))
     else:
         gaps.append("资金流")
@@ -352,7 +360,7 @@ def compute_market_decision(indices: list[dict], sectors: dict | None = None) ->
         for item in valid:
             high, low, price = _f(item.get("high")), _f(item.get("low")), _f(item.get("price"))
             if high is not None and low is not None and price is not None and high > low:
-                positions.append((price - low) / (high - low))
+                positions.append(max(0.0, min(1.0, (price - low) / (high - low))))
         if positions:
             pos = sum(positions) / len(positions)
             dimensions.append(_dim("intraday", "日内承接", 20 + pos * 65, f"指数平均收于日内区间 {pos * 100:.0f}% 位置", 22))
