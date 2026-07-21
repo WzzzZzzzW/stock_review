@@ -138,9 +138,17 @@ class PostmarketIntelligenceTests(unittest.TestCase):
         self.assertEqual([row["key"] for row in rows], [
             "volume_price", "earning_effect", "short_ecology", "rotation",
         ])
-        self.assertIn("权重", rows[0]["conclusion"])
-        self.assertIn("真实持股体验", rows[1]["conclusion"])
-        self.assertIn("失败样本", rows[2]["conclusion"])
+        self.assertEqual([row["title"] for row in rows], [
+            "资金是不是真进场", "多数股票好不好赚钱", "追强股的风险高不高", "热点能不能延续",
+        ])
+        self.assertIn("大盘权重", rows[0]["conclusion"])
+        self.assertIn("多数股票", rows[1]["conclusion"])
+        self.assertIn("炸板和跌停", rows[2]["conclusion"])
+        visible_copy = " ".join(
+            [row["title"] + row["conclusion"] + row["action"] + " ".join(row["evidence"]) for row in rows]
+        )
+        for jargon in ("等权平均", "强弱尾部比", "失败代价", "负期望分布", "分歧承接", "杂毛"):
+            self.assertNotIn(jargon, visible_copy)
 
     def test_related_industries_are_grouped_into_one_mainline_theme(self):
         rows = [

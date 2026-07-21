@@ -10,6 +10,9 @@ from statistics import median
 from typing import Any
 
 
+ENGINE_VERSION = "postmarket-intelligence-v3"
+
+
 def _f(value: Any, default: float = 0.0) -> float:
     try:
         number = float(value)
@@ -427,78 +430,102 @@ def _core_judgements(
     mainline_analysis: dict | None = None,
 ) -> list[dict]:
     amount_ratio = history.get("amount_ratio_5")
-    volume_text = f"相对5日均额{_f(amount_ratio):.2f}倍" if amount_ratio else "5日均额样本不足"
+    if amount_ratio:
+        volume_change = (_f(amount_ratio) - 1) * 100
+        volume_text = (
+            f"成交量比近5日平均多{abs(volume_change):.0f}%"
+            if volume_change >= 0 else
+            f"成交量比近5日平均少{abs(volume_change):.0f}%"
+        )
+    else:
+        volume_text = "近5日成交样本不足"
     price_up = metrics["index_avg"] > 0
     equal_up = metrics["equal_weight_avg"] > 0
     close_strong = metrics["close_position"] >= 70
+    index_gap_text = (
+        f"指数比个股平均强{abs(metrics['index_equal_gap']):.2f}点"
+        if metrics["index_equal_gap"] >= 0 else
+        f"个股平均比指数强{abs(metrics['index_equal_gap']):.2f}点"
+    )
+    size_gap_text = (
+        f"大盘股比小盘股强{abs(metrics['size_gap']):.2f}点"
+        if metrics["size_gap"] >= 0 else
+        f"小盘股比大盘股强{abs(metrics['size_gap']):.2f}点"
+    )
+    if metrics["close_position"] >= 85:
+        close_text = f"指数接近全天最高点收盘（{metrics['close_position']:.0f}%）"
+    elif metrics["close_position"] <= 15:
+        close_text = f"指数接近全天最低点收盘（{metrics['close_position']:.0f}%）"
+    else:
+        close_text = f"指数收在全天波动区间的{metrics['close_position']:.0f}%位置"
 
     if price_up and equal_up and _f(amount_ratio, 1) >= 1.1 and close_strong:
-        volume_conclusion = "放量上攻并由收盘确认，新增成交有效。"
-        volume_action = "允许按主线强度提高参与度，但不追单只高开。"
+        volume_conclusion = "成交放大、指数上涨，而且接近最高点收盘，说明今天确实有资金进场。"
+        volume_action = "可以适当提高主线仓位，但不要追单只高开股。"
         volume_tone = "attack"
     elif price_up and metrics["index_equal_gap"] >= 1.5:
-        volume_conclusion = "指数上涨但资金集中在权重，量能尚未转化为普遍机会。"
-        volume_action = "只保留有独立承接的核心，不向后排扩散。"
+        volume_conclusion = "指数虽然上涨，但钱主要去了大盘权重，多数股票没有同步变好。"
+        volume_action = "只留真正有资金承接的核心股，不买跟风股。"
         volume_tone = "risk"
     elif price_up and _f(amount_ratio, 1) < 0.9:
-        volume_conclusion = "缩量上涨，价格走强但增量确认不足。"
-        volume_action = "不提高总仓位，等放量承接后再升级。"
+        volume_conclusion = "指数涨了，但成交反而缩小，说明跟进资金还不够。"
+        volume_action = "先不加总仓位，等放量上涨后再提高仓位。"
         volume_tone = "neutral"
     elif not price_up and _f(amount_ratio, 1) >= 1.1:
-        volume_conclusion = "放量下跌，筹码交换偏向主动撤退。"
-        volume_action = "直接收缩仓位，不把高成交当成进攻理由。"
+        volume_conclusion = "成交放大但市场下跌，说明卖出资金更主动。"
+        volume_action = "降低仓位，不要把成交放大误当成资金进场。"
         volume_tone = "risk"
     else:
-        volume_conclusion = "量价关系处于中性，成交尚未给出足以改写仓位的信号。"
-        volume_action = "延续当前仓位纪律，等价格、广度和收盘位置同向。"
+        volume_conclusion = "成交量和价格都没有给出明确方向，暂时不用改变仓位。"
+        volume_action = "维持当前仓位，等成交、上涨家数和收盘强度一起变好。"
         volume_tone = "neutral"
 
     volume_logic = (
         f"两市成交{metrics['amount']:.0f}亿，{volume_text}；主要指数平均{_pct(metrics['index_avg'])}，"
-        f"全市场个股平均{_pct(metrics['equal_weight_avg'])}，指数收在日内区间的{metrics['close_position']:.0f}%位置。"
-        "量能只有与价格方向、收盘位置和等权表现同向，才被认定为有效增量。"
+        f"全市场个股平均{_pct(metrics['equal_weight_avg'])}，主要指数平均收在全天波动区间的{metrics['close_position']:.0f}%位置。"
+        "成交放大、指数和多数股票同步上涨、收盘位置较高，四项同向才算资金真正进场。"
     )
 
     tail_ratio = metrics["tail_ratio"]
     if metrics["up_ratio"] >= 60 and metrics["equal_weight_avg"] > 0 and metrics["size_gap"] <= 1.5:
-        earning_conclusion = "赚钱效应已从指数向多数个股扩散。"
-        earning_action = "允许在确认主线中从龙头向前排扩展，仍不做后排。"
+        earning_conclusion = "上涨已经扩散到多数股票，赚钱不只靠少数大盘股。"
+        earning_action = "可以从主线龙头扩展到同板块前排，但仍不碰后排跟风股。"
         earning_tone = "attack"
     elif metrics["up_ratio"] >= 50 and metrics["equal_weight_avg"] > 0:
-        earning_conclusion = "赚钱效应在修复，但弹性仍偏向部分风格。"
-        earning_action = "可试错主线前排，不将局部强势外推为全面加仓。"
+        earning_conclusion = "多数股票开始回暖，但机会仍集中在少数风格。"
+        earning_action = "可以小仓位参与主线前排，但不要因为局部上涨就全面加仓。"
         earning_tone = "neutral"
     elif metrics["index_avg"] > 0 and (metrics["equal_weight_avg"] <= 0 or metrics["size_gap"] >= 2):
-        earning_conclusion = "指数表面强于真实持股体验，属于权重支撑。"
-        earning_action = "小盘和后排退出主计划，仓位按个股承接而非指数红绿决定。"
+        earning_conclusion = "指数看起来不错，但多数股票更弱，主要靠大盘股撑着。"
+        earning_action = "小盘股和跟风股先不做，只看有资金承接的核心股。"
         earning_tone = "risk"
     else:
-        earning_conclusion = "亏钱效应占优，市场参与度不足。"
-        earning_action = "停止向后排扩散，优先处理风险。"
+        earning_conclusion = "多数股票仍然难赚钱，当前不适合扩大参与。"
+        earning_action = "先处理弱势票，不再买跟风股。"
         earning_tone = "risk"
     earning_logic = (
-        f"上涨家数占比{metrics['up_ratio']:.1f}%，但更关键的等权平均为{_pct(metrics['equal_weight_avg'])}；"
-        f"超大盘与小盘差{metrics['size_gap']:+.2f}个百分点，涨超5%与跌超5%的强弱尾部比为{tail_ratio:.2f}。"
-        "这些关系用来区分指数红盘、权重护盘和真正的普遍赚钱效应。"
+        f"上涨股票占比{metrics['up_ratio']:.1f}%，全市场个股平均{_pct(metrics['equal_weight_avg'])}；"
+        f"{size_gap_text}，涨超5%的股票是跌超5%的{tail_ratio:.2f}倍。"
+        "这些数据用来判断是多数股票都能赚钱，还是只涨指数和少数大盘股。"
     )
 
     loss_ratio = metrics["dt"] / max(metrics["zt"], 1)
     if metrics["broken_ratio"] <= 20 and loss_ratio <= 0.5 and tail_ratio >= 2:
-        short_conclusion = "短线成功样本占优，失败代价处于可控区间。"
-        short_action = "允许做确认主线的龙头与首次分歧，不扩散到杂毛。"
+        short_conclusion = "涨停股大多能封住，极端亏损也少，追强股的风险较低。"
+        short_action = "可以做确认主线的龙头和第一次回调，但不要买后排跟风股。"
         short_tone = "attack"
     elif metrics["broken_ratio"] >= 35 or loss_ratio >= 1:
-        short_conclusion = "失败样本代价过高，短线接力是负期望分布。"
-        short_action = "停止接力和弱转强博弈，只保留低位承接。"
+        short_conclusion = "炸板和跌停都多，追强股容易当天吃面或次日被套。"
+        short_action = "停止追涨和做弱转强，只考虑低位、有资金承接的股票。"
         short_tone = "risk"
     else:
-        short_conclusion = "短线生态修复但尚未达到无约束追高的程度。"
-        short_action = "只做成功率最高的主线前排，追高仓位继续受限。"
+        short_conclusion = "短线有所回暖，但追高仍然容易分化。"
+        short_action = "只做主线最强的前排股，并限制追高仓位。"
         short_tone = "neutral"
     short_logic = (
-        f"炸板率{metrics['broken_ratio']:.1f}%，跌停/涨停比{loss_ratio:.2f}，强势尾部/弱势尾部比{tail_ratio:.2f}，"
-        f"最高连板{metrics['max_continuity']}板。这里同时比较成功样本、失败样本和高度承接，"
-        "不会用单独的涨停数量代替短线生态判断。"
+        f"涨停打开率{metrics['broken_ratio']:.1f}%，每100只涨停约对应{loss_ratio * 100:.0f}只跌停，"
+        f"涨超5%的股票是跌超5%的{tail_ratio:.2f}倍，最高连板{metrics['max_continuity']}板。"
+        "同时看涨停能否封住、极端亏损是否增多和高位股是否有人接，才能判断追强股的风险。"
     )
 
     confirmed = [row for row in mainlines if row.get("level") == "确认主线"]
@@ -510,37 +537,37 @@ def _core_judgements(
     )
     names = "、".join(confirmed_themes[:4])
     if len(confirmed) >= 2 and path.get("available") and _f(path.get("breadth_delta")) >= 10:
-        rotation_conclusion = f"主线从盘中到收盘继续扩散，确认方向为{names}。"
-        rotation_action = "明日优先检查原主线分歧承接，不去猜新题材。"
+        rotation_conclusion = f"热点从盘中一直增强到收盘，明天优先看{names}能否继续。"
+        rotation_action = "明天先看原有热点回调时有没有资金接住，不提前押注新题材。"
         rotation_tone = "attack"
     elif confirmed:
-        rotation_conclusion = f"局部主线已确认，但市场仍以结构性轮动为主：{names}。"
-        rotation_action = "只跟踪确认主线龙头，禁止由局部强势外推到全面加仓。"
+        rotation_conclusion = f"市场有明确热点，但资金仍在快速轮动：{names}。"
+        rotation_action = "只看已确认热点的龙头，不因为局部上涨就全面加仓。"
         rotation_tone = "neutral"
     else:
-        rotation_conclusion = "没有方向同时通过资金、广度、龙头和持续性验证。"
-        rotation_action = "主线保持为空，不用涨幅榜强行选方向。"
+        rotation_conclusion = "今天没有热点同时得到资金、板块多数股票和龙头的确认。"
+        rotation_action = "明天没有主攻热点，不从涨幅榜里硬挑股票。"
         rotation_tone = "risk"
     rotation_logic = (
-        f"收盘共{len(confirmed)}个强势行业，系统仅选{len(confirmed_themes)}条产业线进入明日主计划；"
-        f"{len(risk_lines)}个方向因资金撤退或高位分歧降级。"
+        f"收盘有{len(confirmed)}个强势行业，合并后只有{len(confirmed_themes)}条产业主线进入明日计划；"
+        f"{len(risk_lines)}个方向因为资金撤退或高位走弱被剔除。"
         + (
-            f"盘中板块广度{path.get('first_sector_breadth')}%→{path.get('last_sector_breadth')}%，"
+            f"盘中板块上涨占比{path.get('first_sector_breadth')}%→{path.get('last_sector_breadth')}%，"
             f"市场评分{path.get('first_score')}→{path.get('last_score')}。"
-            if path.get("available") else "盘中快照不足，不追加日内持续性结论。"
+            if path.get("available") else "盘中数据不足，暂时无法判断热点是否全天持续。"
         )
-        + "主线资格由板块评分、广度、资金、龙头和盘中持续率共同决定。"
+        + "只有板块多数股票上涨、资金流入、龙头走强并且盘中持续，才算明天还能跟踪的热点。"
     )
 
     return [
-        {"key": "volume_price", "title": "量价与资金效率", "conclusion": volume_conclusion, "logic": volume_logic,
-         "evidence": [volume_text, f"指数/等权差{metrics['index_equal_gap']:+.2f}个百分点", f"收盘位置{metrics['close_position']:.0f}%"], "action": volume_action, "tone": volume_tone},
-        {"key": "earning_effect", "title": "真实赚钱效应", "conclusion": earning_conclusion, "logic": earning_logic,
-         "evidence": [f"等权平均{_pct(metrics['equal_weight_avg'])}", f"市值风格差{metrics['size_gap']:+.2f}点", f"强弱尾部比{tail_ratio:.2f}"], "action": earning_action, "tone": earning_tone},
-        {"key": "short_ecology", "title": "短线生态与失败代价", "conclusion": short_conclusion, "logic": short_logic,
-         "evidence": [f"炸板率{metrics['broken_ratio']:.1f}%", f"跌停/涨停比{loss_ratio:.2f}", f"最高{metrics['max_continuity']}板"], "action": short_action, "tone": short_tone},
-        {"key": "rotation", "title": "主线轮动与持续性", "conclusion": rotation_conclusion, "logic": rotation_logic,
-         "evidence": [f"产业主线{len(confirmed_themes)}条", f"行业确认{len(confirmed)}个", path.get("pattern") or "盘中路径不足"], "action": rotation_action, "tone": rotation_tone},
+        {"key": "volume_price", "title": "资金是不是真进场", "conclusion": volume_conclusion, "logic": volume_logic,
+         "evidence": [volume_text, index_gap_text, close_text], "action": volume_action, "tone": volume_tone},
+        {"key": "earning_effect", "title": "多数股票好不好赚钱", "conclusion": earning_conclusion, "logic": earning_logic,
+         "evidence": [f"全市场个股平均{_pct(metrics['equal_weight_avg'])}", size_gap_text, f"大涨股是大跌股的{tail_ratio:.2f}倍"], "action": earning_action, "tone": earning_tone},
+        {"key": "short_ecology", "title": "追强股的风险高不高", "conclusion": short_conclusion, "logic": short_logic,
+         "evidence": [f"涨停打开率{metrics['broken_ratio']:.1f}%", f"每100只涨停约{loss_ratio * 100:.0f}只跌停", f"最高连板{metrics['max_continuity']}板"], "action": short_action, "tone": short_tone},
+        {"key": "rotation", "title": "热点能不能延续", "conclusion": rotation_conclusion, "logic": rotation_logic,
+         "evidence": [f"确认{len(confirmed_themes)}条产业主线", f"{len(confirmed)}个行业同向走强", path.get("pattern") or "盘中数据不足"], "action": rotation_action, "tone": rotation_tone},
     ]
 
 
@@ -727,7 +754,7 @@ def build_postmarket_intelligence(trade_date: str, market: dict) -> dict:
         audit = {"ready": False, "verdict": f"判断审计暂不可用：{exc}"}
     return {
         "generated_at": datetime.now().isoformat(),
-        "engine": "postmarket-intelligence-v2",
+        "engine": ENGINE_VERSION,
         "data_scope": "收盘全市场 + 历史日档案 + 盘中市场雷达",
         "learning_basis": {
             "version": learning_version.get("version", "L0"),
