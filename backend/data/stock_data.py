@@ -671,6 +671,77 @@ def get_industry_rank(industry_name: str) -> dict:
 # 全市场资金流向缓存（按period，15分钟有效）
 _ff_cache: dict[str, tuple[float, "pd.DataFrame"]] = {}
 _FF_TTL = 900  # 15分钟
+_THS_TODAY_FLOW_LOCK = threading.Lock()
+_ths_today_flow_cache: tuple[float, dict[str, dict]] | None = None
+
+
+def _money_text_to_yuan(value) -> float | None:
+    """把同花顺榜单中的 19.33亿 / 3500万 转为元。"""
+    text = str(value or "").replace(",", "").strip()
+    if not text or text in {"--", "nan", "None"}:
+        return None
+    multiplier = 1.0
+    if text.endswith("亿"):
+        multiplier = 100000000.0
+        text = text[:-1]
+    elif text.endswith("万"):
+        multiplier = 10000.0
+        text = text[:-1]
+    try:
+        number = float(text)
+        return None if number != number else round(number * multiplier, 2)
+    except Exception:
+        return None
+
+
+def get_stock_fund_flow_rank_today(symbols: list[str] | None = None) -> dict[str, dict]:
+    """同花顺今日个股资金榜，作为东财单股历史接口失效时的批量备用源。"""
+    import io
+    import sys
+    import time
+    import akshare as ak
+
+    global _ths_today_flow_cache
+    wanted = {str(symbol).zfill(6) for symbol in (symbols or []) if symbol}
+    now = time.time()
+
+    with _THS_TODAY_FLOW_LOCK:
+        if _ths_today_flow_cache and now - _ths_today_flow_cache[0] < _FF_TTL:
+            all_rows = _ths_today_flow_cache[1]
+        else:
+            old_stderr = sys.stderr
+            sys.stderr = io.StringIO()
+            try:
+                df = ak.stock_fund_flow_individual(symbol="即时")
+            finally:
+                sys.stderr = old_stderr
+
+            all_rows: dict[str, dict] = {}
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
+                    raw_code = str(row.get("股票代码") or "").strip()
+                    if not raw_code or raw_code.lower() == "nan":
+                        continue
+                    code = raw_code.split(".")[0].zfill(6)
+                    main_net = _money_text_to_yuan(row.get("净额"))
+                    turnover = _money_text_to_yuan(row.get("成交额"))
+                    all_rows[code] = {
+                        "date": datetime.date.today().isoformat(),
+                        "main_net": main_net,
+                        "main_net_pct": round(main_net / turnover * 100, 2)
+                        if main_net is not None and turnover else None,
+                        "inflow": _money_text_to_yuan(row.get("流入资金")),
+                        "outflow": _money_text_to_yuan(row.get("流出资金")),
+                        "turnover": turnover,
+                        "source": "ths_market_rank",
+                        "source_note": "同花顺个股资金榜口径，与东方财富可能存在差异。",
+                    }
+            _ths_today_flow_cache = (now, all_rows)
+
+    if not wanted:
+        return dict(all_rows)
+    return {symbol: all_rows[symbol] for symbol in wanted if symbol in all_rows}
+
 
 def get_fund_flow(symbol: str) -> dict:
     """

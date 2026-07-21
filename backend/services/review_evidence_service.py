@@ -1,6 +1,7 @@
 """盘后复盘证据包：个股资金、行业资金、广度、龙头与盘中资金变化。"""
 from __future__ import annotations
 
+import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -57,41 +58,58 @@ def _sector_flow_changes(trade_date: str) -> dict[str, dict]:
 
 
 def _stock_fund_flows(symbols: list[str], trade_date: str) -> dict[str, dict]:
-    from data.stock_data import get_stock_fund_flow_day
+    from data.stock_data import get_stock_fund_flow_day, get_stock_fund_flow_rank_today
 
     unique = [symbol for symbol in dict.fromkeys(symbols) if symbol]
     if not unique:
         return {}
-    result: dict[str, dict] = {}
+    raw_by_symbol: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=min(6, len(unique))) as pool:
         futures = {pool.submit(get_stock_fund_flow_day, symbol): symbol for symbol in unique}
         for future in as_completed(futures):
             symbol = futures[future]
             try:
-                raw = future.result() or {}
+                raw_by_symbol[symbol] = future.result() or {}
             except Exception as exc:
-                raw = {"error": str(exc)}
-            flow_date = str(raw.get("date") or "")[:10]
-            if flow_date != trade_date:
-                result[symbol] = {
-                    "available": False,
-                    "date": flow_date,
-                    "note": "个股资金日期与复盘日期不一致，未用于判断。",
-                }
-                continue
-            main_net_yi = _yi(raw.get("main_net"))
+                raw_by_symbol[symbol] = {"error": str(exc)}
+
+    missing = [symbol for symbol in unique if not raw_by_symbol.get(symbol)]
+    if missing and trade_date == datetime.date.today().isoformat():
+        try:
+            raw_by_symbol.update(get_stock_fund_flow_rank_today(missing))
+        except Exception as exc:
+            from utils.fallback_log import report_data_fallback
+
+            report_data_fallback(
+                "ths", "stock_fund_flow_rank_today", exc,
+                context={"symbols": missing},
+            )
+
+    result: dict[str, dict] = {}
+    for symbol in unique:
+        raw = raw_by_symbol.get(symbol) or {}
+        flow_date = str(raw.get("date") or "")[:10]
+        if flow_date != trade_date:
             result[symbol] = {
-                "available": main_net_yi is not None,
+                "available": False,
                 "date": flow_date,
-                "main_net_yi": main_net_yi,
-                "main_net_pct": _f(raw.get("main_net_pct")),
-                "super_net_yi": _yi(raw.get("super_net")),
-                "big_net_yi": _yi(raw.get("big_net")),
-                "mid_net_yi": _yi(raw.get("mid_net")),
-                "small_net_yi": _yi(raw.get("small_net")),
-                "source": raw.get("source", ""),
-                "basis": "数据商按成交单大小推算，仅作资金方向证据。",
+                "note": "个股资金日期与复盘日期不一致，未用于判断。",
             }
+            continue
+        main_net_yi = _yi(raw.get("main_net"))
+        result[symbol] = {
+            "available": main_net_yi is not None,
+            "date": flow_date,
+            "main_net_yi": main_net_yi,
+            "main_net_pct": _f(raw.get("main_net_pct")),
+            "super_net_yi": _yi(raw.get("super_net")),
+            "big_net_yi": _yi(raw.get("big_net")),
+            "mid_net_yi": _yi(raw.get("mid_net")),
+            "small_net_yi": _yi(raw.get("small_net")),
+            "source": raw.get("source", ""),
+            "basis": raw.get("source_note")
+            or "数据商按成交单大小推算，仅作资金方向证据。",
+        }
     return result
 
 
