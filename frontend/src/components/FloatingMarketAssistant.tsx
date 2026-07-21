@@ -110,6 +110,7 @@ function pageLabel(page: string) {
     premarket: '盘前作战台',
     intraday: '盘中执行台',
     postmarket: '盘后日档案',
+    portfolio: '持仓管理',
     office: 'AI办公室',
     zhengxi: '郑希投研',
     research: '研究工具',

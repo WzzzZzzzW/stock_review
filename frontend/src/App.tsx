@@ -8,11 +8,13 @@ import {
   Microscope,
   MoonStar,
   Sunrise,
+  WalletCards,
 } from 'lucide-react'
 import BackgroundTasks from './components/BackgroundTasks'
 import ErrorBoundary from './components/ErrorBoundary'
 import FloatingMarketAssistant from './components/FloatingMarketAssistant'
 import OfficePage from './pages/OfficePage'
+import PortfolioPage from './pages/PortfolioPage'
 import ResearchToolsPage, { type ResearchSection } from './pages/ResearchToolsPage'
 import StrategyCenterPage from './pages/StrategyCenterPage'
 import TodayReviewPage from './pages/TodayReviewPage'
@@ -21,7 +23,7 @@ import WatchlistPage from './pages/WatchlistPage'
 import ZhengxiPage from './pages/ZhengxiPage'
 
 type PhaseTab = 'premarket' | 'intraday' | 'postmarket'
-type MainTab = PhaseTab | 'office' | 'zhengxi' | 'research' | 'strategy' | 'watchlist'
+type MainTab = PhaseTab | 'portfolio' | 'office' | 'zhengxi' | 'research' | 'strategy' | 'watchlist'
 
 interface MarketStatus {
   phase: PhaseTab
@@ -41,6 +43,7 @@ const primaryTabs = [
   { key: 'premarket' as const, label: '盘前', icon: Sunrise },
   { key: 'intraday' as const, label: '盘中', icon: ChartNoAxesCombined },
   { key: 'postmarket' as const, label: '盘后', icon: MoonStar },
+  { key: 'portfolio' as const, label: '持仓', icon: WalletCards },
   { key: 'office' as const, label: 'AI办公室', icon: Bot },
   { key: 'zhengxi' as const, label: '郑希投研', icon: BriefcaseBusiness },
 ]
@@ -145,6 +148,7 @@ export default function App() {
         </ErrorBoundary>
       )}
       {mainTab === 'postmarket' && <ErrorBoundary name="postmarket"><TodayReviewPage /></ErrorBoundary>}
+      {mainTab === 'portfolio' && <ErrorBoundary name="portfolio"><PortfolioPage /></ErrorBoundary>}
       {mainTab === 'office' && <ErrorBoundary name="office"><OfficePage /></ErrorBoundary>}
       {mainTab === 'zhengxi' && <ErrorBoundary name="zhengxi"><ZhengxiPage /></ErrorBoundary>}
       {mainTab === 'research' && (
