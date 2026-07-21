@@ -335,7 +335,72 @@ class CandidateIn(BaseModel):
 
 # ── 持仓 ──────────────────────────────────────────────────────────────────────
 
-def _enrich_position(p: dict, q: dict) -> dict:
+def _build_daily_trade_flows(trades: list[dict], day: str | None = None) -> dict[str, dict]:
+    """汇总已同步到持仓的当日成交，用于按账户口径计算当日盈亏。"""
+    target_day = day or date.today().isoformat()
+    flows: dict[str, dict] = {}
+    for trade in trades:
+        if trade.get("trade_date") != target_day or trade.get("position_synced") is not True:
+            continue
+        action = trade.get("action")
+        if action not in ("buy", "sell"):
+            continue
+        quantity = _safe(trade.get("quantity"))
+        price = _safe(trade.get("price"))
+        if quantity <= 0 or price <= 0:
+            continue
+        flow = flows.setdefault(str(trade.get("symbol", "")), {
+            "buy_quantity": 0.0,
+            "buy_amount": 0.0,
+            "sell_quantity": 0.0,
+            "sell_amount": 0.0,
+        })
+        flow[f"{action}_quantity"] += quantity
+        flow[f"{action}_amount"] += quantity * price
+    return flows
+
+
+def _calculate_today_pnl(
+    p: dict,
+    current: float,
+    prev_close: float,
+    today_flow: dict | None = None,
+    day: str | None = None,
+) -> tuple[float, str]:
+    """按期初仓位和当日成交计算当日盈亏，避免把买入前涨幅算给用户。"""
+    quantity = _safe(p.get("quantity"))
+    if current <= 0 or quantity <= 0:
+        return 0.0, "quote_unavailable"
+
+    flow = today_flow or {}
+    has_synced_trades = any(_safe(flow.get(key)) > 0 for key in (
+        "buy_quantity", "buy_amount", "sell_quantity", "sell_amount"
+    ))
+    if has_synced_trades and prev_close > 0:
+        buy_quantity = _safe(flow.get("buy_quantity"))
+        sell_quantity = _safe(flow.get("sell_quantity"))
+        opening_quantity = quantity - buy_quantity + sell_quantity
+        if opening_quantity >= -1e-6:
+            opening_quantity = max(0.0, opening_quantity)
+            pnl = (
+                current * quantity
+                + _safe(flow.get("sell_amount"))
+                - prev_close * opening_quantity
+                - _safe(flow.get("buy_amount"))
+            )
+            return pnl, "trade_flow"
+
+    target_day = day or date.today().isoformat()
+    if p.get("buy_date") == target_day:
+        cost_value = _safe(p.get("buy_price")) * quantity
+        return current * quantity - cost_value, "same_day_cost"
+
+    if prev_close > 0:
+        return (current - prev_close) * quantity, "previous_close"
+    return 0.0, "quote_unavailable"
+
+
+def _enrich_position(p: dict, q: dict, today_flow: dict | None = None) -> dict:
     """用实时行情填充计算字段"""
     current   = _safe(q.get("price", 0))
     prev_close = _safe(q.get("prev_close", 0))
@@ -345,7 +410,7 @@ def _enrich_position(p: dict, q: dict) -> dict:
     curr_val  = current * p["quantity"] if current > 0 else cost_val
     pnl_amt   = curr_val - cost_val
     pnl_pct   = (pnl_amt / cost_val * 100) if cost_val > 0 else 0.0
-    today_pnl = (current - prev_close) * p["quantity"] if prev_close > 0 and current > 0 else 0.0
+    today_pnl, today_pnl_basis = _calculate_today_pnl(p, current, prev_close, today_flow)
 
     try:
         buy_dt       = date.fromisoformat(p["buy_date"])
@@ -379,6 +444,7 @@ def _enrich_position(p: dict, q: dict) -> dict:
         "pnl_amount":      round(pnl_amt, 2),
         "pnl_pct":         round(pnl_pct, 2),
         "today_pnl":       round(today_pnl, 2),
+        "today_pnl_basis": today_pnl_basis,
         "holding_days":    holding_days,
         "at_stop_loss":    at_stop,
         "near_stop_loss":  near_stop,
@@ -393,6 +459,7 @@ def get_positions():
     """获取所有持仓（含实时行情、技术结构和统一多维裁决）"""
     store     = _load_store()
     positions = store.get("positions", [])
+    today_flows = _build_daily_trade_flows(store.get("trades", []))
 
     if not positions:
         return JSONResponse({
@@ -435,7 +502,7 @@ def get_positions():
     for p in positions:
         sym = p["symbol"]
         q   = quotes.get(sym, {})
-        ep  = _enrich_position(p, q)
+        ep  = _enrich_position(p, q, today_flows.get(sym))
         industry = industry_map.get(sym, "")
         ep["industry"] = industry
         ep["tech"] = tech_map.get(sym) or {}
