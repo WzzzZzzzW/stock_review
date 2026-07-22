@@ -14,6 +14,7 @@ import {
   Target,
 } from 'lucide-react'
 import { aiAssistantStore, type AssistantTargetType } from '../stores/aiAssistantStore'
+import StockCapitalRanking from './StockCapitalRanking'
 
 type Phase = 'premarket' | 'intraday'
 type ResearchSection = 'market' | 'limitup' | 'lhb' | 'industry' | 'news'
@@ -109,6 +110,7 @@ interface Props {
   data: MarketRadarData | null
   loading?: boolean
   onOpenResearch?: (section: ResearchSection) => void
+  onSelectStock?: (symbol: string, name: string) => void
 }
 
 function pctClass(value: number) {
@@ -233,7 +235,7 @@ function PersonalRows({ rows, phase }: { rows: PersonalRow[]; phase: Phase }) {
   )
 }
 
-export default function MarketRadarPanel({ phase, data, loading, onOpenResearch }: Props) {
+export default function MarketRadarPanel({ phase, data, loading, onOpenResearch, onSelectStock }: Props) {
   const [rotationMode, setRotationMode] = useState<'attack' | 'risk' | 'all'>('attack')
   const [personalMode, setPersonalMode] = useState<'positions' | 'watchlist'>('positions')
   const rotationRows = useMemo(() => {
@@ -351,6 +353,8 @@ export default function MarketRadarPanel({ phase, data, loading, onOpenResearch 
           </div>
         </div>
       </section>
+
+      {phase === 'intraday' && <StockCapitalRanking onSelectStock={onSelectStock} />}
 
       {phase === 'intraday' && (
         <section className="overflow-hidden rounded border border-gray-800 bg-gray-900/50">

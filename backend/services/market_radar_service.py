@@ -468,6 +468,15 @@ def _capital_map(rotations: list[dict]) -> dict:
     }
 
 
+def get_stock_capital_ranking(limit: int = 10, force: bool = False) -> dict:
+    from data.stock_data import get_realtime_stock_fund_flow_rank
+
+    return get_realtime_stock_fund_flow_rank(
+        limit=max(1, min(limit, 20)),
+        max_age_seconds=0 if force else 60,
+    )
+
+
 def _briefing(market: dict, rotations: list[dict], news: list[dict], personal: dict) -> dict:
     attack = [row for row in rotations if row.get("tone") == "attack"][:4]
     risk = [row for row in rotations if row.get("tone") == "risk"][:4]

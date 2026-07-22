@@ -1,10 +1,34 @@
 import unittest
 from unittest.mock import patch
 
-from services.market_radar_service import _capital_map, classify_sector_state, evaluate_radar_day
+from services.market_radar_service import (
+    _capital_map,
+    classify_sector_state,
+    evaluate_radar_day,
+    get_stock_capital_ranking,
+)
 
 
 class MarketRadarStateTests(unittest.TestCase):
+    @patch("data.stock_data.get_realtime_stock_fund_flow_rank")
+    def test_stock_capital_ranking_uses_realtime_top_ten(self, realtime_rank):
+        realtime_rank.return_value = {
+            "inflow": [{"symbol": "000063", "net_amount_yi": 21.75}],
+            "outflow": [{"symbol": "002156", "net_amount_yi": -20.56}],
+        }
+
+        result = get_stock_capital_ranking()
+
+        realtime_rank.assert_called_once_with(limit=10, max_age_seconds=60)
+        self.assertEqual(result["inflow"][0]["symbol"], "000063")
+        self.assertEqual(result["outflow"][0]["symbol"], "002156")
+
+    @patch("data.stock_data.get_realtime_stock_fund_flow_rank", return_value={})
+    def test_stock_capital_manual_refresh_bypasses_cache(self, realtime_rank):
+        get_stock_capital_ranking(force=True)
+
+        realtime_rank.assert_called_once_with(limit=10, max_age_seconds=0)
+
     def test_capital_map_returns_top_ten_in_both_directions(self):
         rotations = [
             {"name": f"板块{i}", "net_in": float(i)}

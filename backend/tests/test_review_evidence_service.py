@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from data.stock_data import (
     _fund_flow_from_eastmoney_curl,
     _money_text_to_yuan,
+    _normalize_realtime_fund_flow_frame,
     get_stock_fund_flow_rank_today,
 )
 from services.review_evidence_service import _stock_fund_flows, build_review_evidence
@@ -12,6 +13,29 @@ from services.today_review_service import _build_ai_block_analysis
 
 
 class ReviewEvidenceTests(unittest.TestCase):
+    def test_realtime_stock_flow_rows_keep_useful_market_fields(self):
+        import pandas as pd
+
+        frame = pd.DataFrame([{
+            "股票代码": 63,
+            "股票简称": "中兴通讯",
+            "最新价": 37.83,
+            "涨跌幅": "8.46%",
+            "换手率": "6.93%",
+            "流入资金(元)": "61.38亿",
+            "流出资金(元)": "39.63亿",
+            "净额(元)": "21.75亿",
+            "成交额(元)": "102.78亿",
+        }])
+
+        result = _normalize_realtime_fund_flow_frame(frame, "inflow", 10)
+
+        self.assertEqual(result[0]["symbol"], "000063")
+        self.assertEqual(result[0]["name"], "中兴通讯")
+        self.assertEqual(result[0]["pct_change"], 8.46)
+        self.assertEqual(result[0]["net_amount_yi"], 21.75)
+        self.assertEqual(result[0]["net_ratio"], 21.16)
+
     def test_money_text_to_yuan(self):
         self.assertEqual(_money_text_to_yuan("19.33亿"), 1933000000.0)
         self.assertEqual(_money_text_to_yuan("3500万"), 35000000.0)

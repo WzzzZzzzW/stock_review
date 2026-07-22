@@ -673,6 +673,8 @@ _ff_cache: dict[str, tuple[float, "pd.DataFrame"]] = {}
 _FF_TTL = 900  # 15分钟
 _THS_TODAY_FLOW_LOCK = threading.Lock()
 _ths_today_flow_cache: tuple[float, dict[str, dict]] | None = None
+_THS_REALTIME_FLOW_LOCK = threading.Lock()
+_ths_realtime_flow_cache: tuple[float, dict] | None = None
 
 
 def _money_text_to_yuan(value) -> float | None:
@@ -741,6 +743,119 @@ def get_stock_fund_flow_rank_today(symbols: list[str] | None = None) -> dict[str
     if not wanted:
         return dict(all_rows)
     return {symbol: all_rows[symbol] for symbol in wanted if symbol in all_rows}
+
+
+def _number_text_to_float(value) -> float | None:
+    text = str(value or "").replace(",", "").replace("%", "").strip()
+    if not text or text in {"--", "nan", "None"}:
+        return None
+    try:
+        number = float(text)
+        return None if number != number else number
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_realtime_fund_flow_frame(
+    frame: "pd.DataFrame", direction: str, limit: int
+) -> list[dict]:
+    rows: list[dict] = []
+    if frame is None or frame.empty:
+        return rows
+
+    for _, row in frame.iterrows():
+        raw_code = str(row.get("股票代码") or "").strip()
+        if not raw_code or raw_code.lower() == "nan":
+            continue
+        net_amount = _money_text_to_yuan(row.get("净额(元)", row.get("净额")))
+        if net_amount is None:
+            continue
+        if direction == "inflow" and net_amount <= 0:
+            continue
+        if direction == "outflow" and net_amount >= 0:
+            continue
+
+        turnover = _money_text_to_yuan(row.get("成交额(元)", row.get("成交额")))
+        rows.append({
+            "symbol": raw_code.split(".")[0].zfill(6),
+            "name": str(row.get("股票简称") or raw_code).strip(),
+            "price": _number_text_to_float(row.get("最新价")),
+            "pct_change": _number_text_to_float(row.get("涨跌幅")),
+            "turnover_rate": _number_text_to_float(row.get("换手率")),
+            "inflow_yi": round((_money_text_to_yuan(row.get("流入资金(元)", row.get("流入资金"))) or 0) / 100000000, 2),
+            "outflow_yi": round((_money_text_to_yuan(row.get("流出资金(元)", row.get("流出资金"))) or 0) / 100000000, 2),
+            "net_amount_yi": round(net_amount / 100000000, 2),
+            "turnover_yi": round(turnover / 100000000, 2) if turnover is not None else None,
+            "net_ratio": round(net_amount / turnover * 100, 2) if turnover else None,
+        })
+
+    rows.sort(key=lambda item: item["net_amount_yi"], reverse=direction == "inflow")
+    result = rows[:max(1, limit)]
+    for index, item in enumerate(result, start=1):
+        item["rank"] = index
+    return result
+
+
+def get_realtime_stock_fund_flow_rank(
+    limit: int = 10, max_age_seconds: int = 60
+) -> dict:
+    """同花顺即时个股资金净额榜，只拉取净流入和净流出排序的首页。"""
+    import io
+    import time
+    import requests
+    from akshare.stock_feature.stock_fund_flow import (
+        _get_file_content_ths,
+        py_mini_racer,
+    )
+
+    global _ths_realtime_flow_cache
+    now = time.time()
+    ttl = max(0, int(max_age_seconds))
+
+    with _THS_REALTIME_FLOW_LOCK:
+        if ttl and _ths_realtime_flow_cache and now - _ths_realtime_flow_cache[0] < ttl:
+            return _ths_realtime_flow_cache[1]
+
+        try:
+            js_runtime = py_mini_racer.MiniRacer()
+            js_runtime.eval(_get_file_content_ths("ths.js"))
+            token = js_runtime.call("v")
+            headers = {
+                "Accept": "text/html, */*; q=0.01",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/90.0",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": "http://data.10jqka.com.cn/funds/ggzjl/",
+                "hexin-v": token,
+            }
+            frames: dict[str, pd.DataFrame] = {}
+            for direction, order in (("inflow", "desc"), ("outflow", "asc")):
+                url = (
+                    "http://data.10jqka.com.cn/funds/ggzjl/field/zjjlr/"
+                    f"order/{order}/page/1/ajax/1/free/1/"
+                )
+                response = requests.get(url, headers=headers, timeout=12)
+                response.raise_for_status()
+                frames[direction] = pd.read_html(io.StringIO(response.text))[0]
+
+            result = {
+                "inflow": _normalize_realtime_fund_flow_frame(frames["inflow"], "inflow", limit),
+                "outflow": _normalize_realtime_fund_flow_frame(frames["outflow"], "outflow", limit),
+                "updated_at": datetime.datetime.now().strftime("%H:%M:%S"),
+                "refresh_seconds": ttl or 60,
+                "source": "同花顺个股资金榜",
+                "note": "净额按数据商成交分类推算，不代表交易所披露的真实账户资金流向。",
+                "stale": False,
+            }
+            _ths_realtime_flow_cache = (now, result)
+            return result
+        except Exception as exc:
+            report_data_fallback("akshare", "realtime_stock_fund_flow_rank", exc)
+            if _ths_realtime_flow_cache:
+                stale = dict(_ths_realtime_flow_cache[1])
+                stale["stale"] = True
+                stale["note"] = f"{stale['note']} 当前刷新失败，暂时显示最近一次成功数据。"
+                return stale
+            raise
 
 
 def get_fund_flow(symbol: str) -> dict:

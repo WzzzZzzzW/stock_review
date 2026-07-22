@@ -372,7 +372,13 @@ export default function TradingWorkspacePage({ phase, onSelectStock, onOpenResea
         )}
       </section>
 
-      <MarketRadarPanel phase={phase} data={radar} loading={loading} onOpenResearch={onOpenResearch} />
+      <MarketRadarPanel
+        phase={phase}
+        data={radar}
+        loading={loading}
+        onOpenResearch={onOpenResearch}
+        onSelectStock={onSelectStock}
+      />
 
       <div className="space-y-4">
         <section className="overflow-hidden rounded border border-gray-800 bg-gray-900/50">
