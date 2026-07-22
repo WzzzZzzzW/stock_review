@@ -67,7 +67,7 @@ function RankingColumn({
       <div className={`flex items-center gap-2 border-b border-gray-800 px-4 py-2.5 text-xs font-medium ${titleColor}`}>
         <Icon className="h-4 w-4" />{title}
         <span className="ml-auto grid w-[270px] grid-cols-[72px_100px_74px] text-right font-normal text-gray-600">
-          <span>涨跌</span><span>资金净额</span><span>净额/成交</span>
+          <span>涨跌</span><span>资金净额</span><span>换手率</span>
         </span>
       </div>
       {rows.length ? (
@@ -87,7 +87,7 @@ function RankingColumn({
                 </span>
                 <span className={`text-right text-sm ${pctClass(row.pct_change)}`}>{percent(row.pct_change)}</span>
                 <span className={`text-right text-sm font-medium ${pctClass(row.net_amount_yi)}`}>{money(row.net_amount_yi)}</span>
-                <span className={`text-right text-xs ${pctClass(row.net_ratio)}`}>{percent(row.net_ratio)}</span>
+                <span className="text-right text-xs text-gray-400">{percent(row.turnover_rate)}</span>
               </button>
               <button
                 type="button"
