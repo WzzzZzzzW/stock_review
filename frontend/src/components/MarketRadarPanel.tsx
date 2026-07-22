@@ -203,7 +203,7 @@ function NewsRows({ rows, phase }: { rows: NewsEvent[]; phase: Phase }) {
             <div className="mt-1 text-xs text-gray-600">
               {(row.sources || []).filter(Boolean).join(' / ') || '来源未知'} · {newsTimeLabel(row.published)}
             </div>
-            <div className="mt-1 text-xs leading-5 text-gray-500">{row.one_line || '等待盘面量价和板块广度验证，不因单条消息直接追涨。'}</div>
+            {row.one_line && <div className="mt-1 text-xs leading-5 text-gray-500">{row.one_line}</div>}
             {!!row.affected_sectors?.length && <div className="mt-1 text-xs text-blue-300">映射：{row.affected_sectors.join(' · ')}</div>}
           </div>
           <div className={`text-xs ${row.direction === 'positive' ? 'text-red-400' : row.direction === 'negative' ? 'text-emerald-400' : 'text-gray-500'}`}>
