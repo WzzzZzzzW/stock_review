@@ -129,6 +129,23 @@ function timeLabel(value?: string) {
   return match?.[1] || value
 }
 
+function newsTimeLabel(value?: string) {
+  if (!value) return '时间未知'
+  const localMatch = value.match(/^\d{4}-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/)
+  if (localMatch) return `${localMatch[1]}-${localMatch[2]} ${localMatch[3]}:${localMatch[4]}`
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(parsed).replace(/\//g, '-')
+}
+
 function money(value: number) {
   return `${value > 0 ? '+' : ''}${Number(value || 0).toFixed(2)}亿`
 }
@@ -180,10 +197,12 @@ function NewsRows({ rows, phase }: { rows: NewsEvent[]; phase: Phase }) {
   return (
     <div className="divide-y divide-gray-800">
       {rows.slice(0, 5).map((row, index) => (
-        <div key={`${row.title}-${index}`} className="grid gap-2 px-4 py-3 sm:grid-cols-[42px_1fr_auto_32px] sm:items-start">
-          <div className="pt-0.5 text-xs font-semibold text-amber-300">{Math.round(row.hotness || 0)}</div>
+        <div key={`${row.title}-${index}`} className="grid gap-2 px-4 py-3 sm:grid-cols-[1fr_auto_32px] sm:items-start">
           <div>
             <div className="text-sm font-medium leading-5 text-gray-200">{row.title}</div>
+            <div className="mt-1 text-xs text-gray-600">
+              {(row.sources || []).filter(Boolean).join(' / ') || '来源未知'} · {newsTimeLabel(row.published)}
+            </div>
             <div className="mt-1 text-xs leading-5 text-gray-500">{row.one_line || '等待盘面量价和板块广度验证，不因单条消息直接追涨。'}</div>
             {!!row.affected_sectors?.length && <div className="mt-1 text-xs text-blue-300">映射：{row.affected_sectors.join(' · ')}</div>}
           </div>
