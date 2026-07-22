@@ -30,7 +30,6 @@ interface LhbEntry {
   symbol:    string
   name:      string
   price:     number
-  deviation: number
   volume:    number
   amount:    number
   reason:    string
@@ -53,12 +52,6 @@ interface Props {
 
 // ── 工具 ──────────────────────────────────────────────────────────────────────
 function netColor(v: number): string {
-  if (v > 0) return 'text-red-400'
-  if (v < 0) return 'text-emerald-400'
-  return 'text-gray-400'
-}
-
-function deviationColor(v: number): string {
   if (v > 0) return 'text-red-400'
   if (v < 0) return 'text-emerald-400'
   return 'text-gray-400'
@@ -291,7 +284,6 @@ function DailyView({
                 <tr className="border-b border-gray-800 text-xs text-gray-500">
                   <th className="text-left px-4 py-3">股票</th>
                   <th className="text-right px-4 py-3">收盘价</th>
-                  <th className="text-right px-4 py-3">对应值(%)</th>
                   <th className="text-right px-4 py-3 hidden sm:table-cell">成交额(亿)</th>
                   <th className="text-left px-4 py-3">上榜原因</th>
                 </tr>
@@ -317,9 +309,6 @@ function DailyView({
                     <td className="px-4 py-2.5 text-right font-mono tabular-nums text-gray-300">
                       {e.price > 0 ? `¥${e.price.toFixed(2)}` : '--'}
                     </td>
-                    <td className={`px-4 py-2.5 text-right font-mono font-semibold tabular-nums ${deviationColor(e.deviation)}`}>
-                      {e.deviation > 0 ? '+' : ''}{e.deviation.toFixed(2)}%
-                    </td>
                     <td className="px-4 py-2.5 text-right text-gray-400 font-mono tabular-nums hidden sm:table-cell">
                       {e.amount.toFixed(2)}
                     </td>
@@ -336,7 +325,7 @@ function DailyView({
                 ))}
                 {entries.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="text-center py-12 text-gray-600 text-sm">
+                    <td colSpan={4} className="text-center py-12 text-gray-600 text-sm">
                       {data?.message || '该日期暂无龙虎榜数据'}
                     </td>
                   </tr>
@@ -364,7 +353,7 @@ export default function LhbPage({ onSelectStock }: Props) {
         {/* 标题 */}
         <div>
           <h1 className="text-2xl font-bold text-white">龙虎榜</h1>
-          <p className="text-sm text-gray-500 mt-1">新浪财经（AkShare）汇总，金额统一为亿元，缓存 5 分钟</p>
+          <p className="text-sm text-gray-500 mt-1">新浪财经 / 东方财富（AkShare）汇总，金额统一为亿元，缓存 5 分钟</p>
         </div>
 
         {/* Tab 切换 */}

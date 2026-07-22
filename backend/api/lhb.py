@@ -6,6 +6,7 @@
 import time
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
+from utils.fallback_log import report_data_fallback
 
 router = APIRouter(prefix="/api/lhb", tags=["龙虎榜"])
 
@@ -13,6 +14,7 @@ router = APIRouter(prefix="/api/lhb", tags=["龙虎榜"])
 _CACHE_TTL = 300  # 5 分钟
 _AMOUNT_UNIT = "亿元"
 _SOURCE_NAME = "新浪财经（AkShare）"
+_DAILY_SOURCE_NAME = "新浪财经 / 东方财富（AkShare）"
 
 _top_cache: dict[str, dict] = {}   # key = str(days)
 _daily_cache: dict[str, dict] = {} # key = date_str
@@ -35,11 +37,104 @@ def _daily_empty_payload(date_str: str, message: str) -> dict:
         "date": date_str,
         "updated_at": datetime.now().strftime("%H:%M:%S"),
         "amount_unit": _AMOUNT_UNIT,
-        "source": _SOURCE_NAME,
+        "source": _DAILY_SOURCE_NAME,
         "sort_by": "amount_desc",
         "is_published": False,
         "message": message,
     }
+
+
+def _clean_text(value) -> str:
+    text = "" if value is None else str(value).strip()
+    return "" if text.lower() in {"nan", "none", "nat"} else text
+
+
+def _safe_float(value) -> float | None:
+    try:
+        number = float(value)
+        return None if number != number else number
+    except (TypeError, ValueError):
+        return None
+
+
+def _reason_kind(reason: str) -> str:
+    if "退市" in reason:
+        return "delisting"
+    if "连续" in reason or "累计" in reason:
+        return "cumulative"
+    if "换手率" in reason:
+        return "turnover"
+    if "振幅" in reason:
+        return "amplitude"
+    if "涨幅" in reason:
+        return "daily_up"
+    if "跌幅" in reason:
+        return "daily_down"
+    return "other"
+
+
+def _fill_missing_reasons(df, em_df):
+    """用东方财富同日榜单补齐新浪空缺的上榜原因。"""
+    df["reason"] = df["reason"].astype(object)
+    candidates_by_symbol: dict[str, list[dict]] = {}
+    for _, row in em_df.iterrows():
+        symbol = _clean_text(row.get("代码", "")).zfill(6)
+        reason = _clean_text(row.get("上榜原因", ""))
+        if not symbol or not reason:
+            continue
+        candidates = candidates_by_symbol.setdefault(symbol, [])
+        if any(item["reason"] == reason for item in candidates):
+            continue
+        candidates.append({
+            "reason": reason,
+            "kind": _reason_kind(reason),
+            "pct": _safe_float(row.get("涨跌幅")),
+            "turnover": _safe_float(row.get("换手率")),
+        })
+
+    for symbol, group in df.groupby("symbol", sort=False):
+        missing_indexes = [idx for idx in group.index if not _clean_text(df.at[idx, "reason"])]
+        if not missing_indexes:
+            continue
+
+        known_kinds = {
+            _reason_kind(_clean_text(df.at[idx, "reason"]))
+            for idx in group.index
+            if _clean_text(df.at[idx, "reason"])
+        }
+        available = [
+            item.copy()
+            for item in candidates_by_symbol.get(str(symbol).zfill(6), [])
+            if item["kind"] not in known_kinds
+        ]
+
+        unresolved = []
+        for idx in missing_indexes:
+            value = _safe_float(df.at[idx, "deviation"])
+            scored = []
+            for pos, item in enumerate(available):
+                reference = None
+                if item["kind"] == "turnover":
+                    reference = item["turnover"]
+                elif item["kind"] in {"daily_up", "daily_down"}:
+                    reference = item["pct"]
+                if value is not None and reference is not None:
+                    scored.append((abs(value - reference), pos))
+
+            if scored and min(scored)[0] <= 0.3:
+                _, pos = min(scored)
+                df.at[idx, "reason"] = available.pop(pos)["reason"]
+            else:
+                unresolved.append(idx)
+
+        if len(unresolved) == len(available):
+            for idx, item in zip(unresolved, available):
+                df.at[idx, "reason"] = item["reason"]
+
+    df["reason"] = df["reason"].map(
+        lambda value: _clean_text(value) or "上榜原因暂缺"
+    )
+    return df
 
 
 # ── 近N日上榜 ─────────────────────────────────────────────────────────────────
@@ -197,6 +292,21 @@ def lhb_daily(date: str = Query(default=None, description="日期，格式 YYYYM
 
     df = df.rename(columns=rename)
 
+    if "reason" in df.columns and df["reason"].map(lambda value: not _clean_text(value)).any():
+        try:
+            em_df = ak.stock_lhb_detail_em(start_date=date_str, end_date=date_str)
+            df = _fill_missing_reasons(df, em_df)
+        except Exception as error:
+            report_data_fallback(
+                "eastmoney",
+                "fill_lhb_daily_reasons",
+                error,
+                context={"date": date_str},
+            )
+            df["reason"] = df["reason"].map(
+                lambda value: _clean_text(value) or "上榜原因暂缺"
+            )
+
     entries = []
     for _, row in df.iterrows():
         try:
@@ -227,7 +337,7 @@ def lhb_daily(date: str = Query(default=None, description="日期，格式 YYYYM
             "deviation": deviation,
             "volume":    volume,
             "amount":    amount,
-            "reason":    str(row.get("reason", "")),
+            "reason":    _clean_text(row.get("reason", "")) or "上榜原因暂缺",
         })
 
     # 当日明细优先展示资金关注度最高的股票；相同成交额保留源数据顺序。
@@ -239,7 +349,7 @@ def lhb_daily(date: str = Query(default=None, description="日期，格式 YYYYM
         "date": date_str,
         "updated_at": updated_at,
         "amount_unit": _AMOUNT_UNIT,
-        "source": _SOURCE_NAME,
+        "source": _DAILY_SOURCE_NAME,
         "sort_by": "amount_desc",
         "is_published": True,
         "message": "",
