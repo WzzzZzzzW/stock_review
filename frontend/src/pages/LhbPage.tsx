@@ -22,6 +22,8 @@ interface TopResponse {
   stocks:     LhbStock[]
   days:       number
   updated_at: string
+  amount_unit: string
+  source:     string
 }
 
 interface LhbEntry {
@@ -38,6 +40,10 @@ interface DailyResponse {
   entries:    LhbEntry[]
   date:       string
   updated_at: string
+  amount_unit: string
+  source:     string
+  is_published: boolean
+  message:    string
 }
 
 interface Props {
@@ -57,8 +63,11 @@ function deviationColor(v: number): string {
   return 'text-gray-400'
 }
 
-function latestTradingDay(): string {
+function latestPublishedTradingDay(): string {
   const d = new Date()
+  if (d.getDay() >= 1 && d.getDay() <= 5 && d.getHours() < 16) {
+    d.setDate(d.getDate() - 1)
+  }
   while (d.getDay() === 0 || d.getDay() === 6) {
     d.setDate(d.getDate() - 1)
   }
@@ -114,7 +123,7 @@ function TopView({
       {/* 控制栏 */}
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-gray-500">
-          {data ? `共 ${sorted.length} 只上榜股票，净额单位：万元` : ''}
+          {data ? `共 ${sorted.length} 只上榜股票，金额单位：${data.amount_unit}` : ''}
         </p>
         <div className="flex items-center gap-3">
           {data?.updated_at && (
@@ -142,9 +151,9 @@ function TopView({
                 <th className="text-left px-4 py-3 w-10">#</th>
                 <th className="text-left px-2 py-3">股票</th>
                 <th className="text-right px-4 py-3">上榜次数</th>
-                <th className="text-right px-4 py-3">净额(万)</th>
-                <th className="text-right px-4 py-3 hidden md:table-cell">累积买入(万)</th>
-                <th className="text-right px-4 py-3 hidden md:table-cell">累积卖出(万)</th>
+                <th className="text-right px-4 py-3">净额(亿)</th>
+                <th className="text-right px-4 py-3 hidden md:table-cell">累积买入(亿)</th>
+                <th className="text-right px-4 py-3 hidden md:table-cell">累积卖出(亿)</th>
                 <th className="text-right px-4 py-3 hidden sm:table-cell">买入席位</th>
                 <th className="text-right px-4 py-3 hidden sm:table-cell">卖出席位</th>
               </tr>
@@ -207,14 +216,17 @@ function DailyView({
 }: {
   onSelectStock?: (symbol: string, name: string) => void
 }) {
-  const [date, setDate] = useState<string>(latestTradingDay())
-  const [queryDate, setQueryDate] = useState<string>(latestTradingDay())
+  const [date, setDate] = useState<string>(latestPublishedTradingDay())
+  const [queryDate, setQueryDate] = useState<string>(latestPublishedTradingDay())
 
   const { data, isLoading, isError, error, refetch } = useQuery<DailyResponse>({
     queryKey: ['lhb-daily', queryDate],
     queryFn: async () => {
       const res = await fetch(`/api/lhb/daily?date=${queryDate}`)
-      if (!res.ok) throw new Error('龙虎榜日报数据获取失败')
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.detail || '龙虎榜日报数据获取失败')
+      }
       return res.json()
     },
     staleTime: 5 * 60 * 1000,
@@ -264,8 +276,13 @@ function DailyView({
         <>
           {data && (
             <p className="text-xs text-gray-600 mb-3">
-              {data.date} — 共 {entries.length} 条记录
+              {data.date} — 共 {entries.length} 条记录，金额单位：{data.amount_unit}
             </p>
+          )}
+          {data?.message && (
+            <div className="mb-3 rounded-lg border border-amber-800/70 bg-amber-950/20 px-4 py-3 text-sm text-amber-300">
+              {data.message}
+            </div>
           )}
           <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
             <table className="w-full text-sm">
@@ -274,7 +291,7 @@ function DailyView({
                   <th className="text-left px-4 py-3">股票</th>
                   <th className="text-right px-4 py-3">收盘价</th>
                   <th className="text-right px-4 py-3">对应值(%)</th>
-                  <th className="text-right px-4 py-3 hidden sm:table-cell">成交额(万)</th>
+                  <th className="text-right px-4 py-3 hidden sm:table-cell">成交额(亿)</th>
                   <th className="text-left px-4 py-3">上榜原因</th>
                 </tr>
               </thead>
@@ -319,7 +336,7 @@ function DailyView({
                 {entries.length === 0 && (
                   <tr>
                     <td colSpan={5} className="text-center py-12 text-gray-600 text-sm">
-                      该日期暂无龙虎榜数据
+                      {data?.message || '该日期暂无龙虎榜数据'}
                     </td>
                   </tr>
                 )}
@@ -346,7 +363,7 @@ export default function LhbPage({ onSelectStock }: Props) {
         {/* 标题 */}
         <div>
           <h1 className="text-2xl font-bold text-white">龙虎榜</h1>
-          <p className="text-sm text-gray-500 mt-1">新浪财经龙虎榜数据，缓存 5 分钟</p>
+          <p className="text-sm text-gray-500 mt-1">新浪财经（AkShare）汇总，金额统一为亿元，缓存 5 分钟</p>
         </div>
 
         {/* Tab 切换 */}

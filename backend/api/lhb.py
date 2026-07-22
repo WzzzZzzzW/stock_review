@@ -11,18 +11,34 @@ router = APIRouter(prefix="/api/lhb", tags=["龙虎榜"])
 
 # ── 缓存 ──────────────────────────────────────────────────────────────────────
 _CACHE_TTL = 300  # 5 分钟
+_AMOUNT_UNIT = "亿元"
+_SOURCE_NAME = "新浪财经（AkShare）"
 
 _top_cache: dict[str, dict] = {}   # key = str(days)
 _daily_cache: dict[str, dict] = {} # key = date_str
 
 
-def _latest_trading_day() -> str:
-    """返回最近的交易日（跳过周末），格式 YYYYMMDD"""
+def _latest_published_trading_day() -> str:
+    """返回最近可能已经披露龙虎榜的交易日，格式 YYYYMMDD。"""
     d = datetime.now()
-    # 如果是周末，回退到周五
+    # 龙虎榜是盘后数据。16:00 前默认查看上一交易日，避免把未发布误报为失败。
+    if d.weekday() < 5 and d.hour < 16:
+        d -= timedelta(days=1)
     while d.weekday() >= 5:  # 5=Sat, 6=Sun
         d -= timedelta(days=1)
     return d.strftime("%Y%m%d")
+
+
+def _daily_empty_payload(date_str: str, message: str) -> dict:
+    return {
+        "entries": [],
+        "date": date_str,
+        "updated_at": datetime.now().strftime("%H:%M:%S"),
+        "amount_unit": _AMOUNT_UNIT,
+        "source": _SOURCE_NAME,
+        "is_published": False,
+        "message": message,
+    }
 
 
 # ── 近N日上榜 ─────────────────────────────────────────────────────────────────
@@ -36,7 +52,13 @@ def lhb_top(days: int = Query(default=5, description="统计天数，支持 5/10
     now = time.time()
     cached = _top_cache.get(key)
     if cached and now - cached["ts"] < _CACHE_TTL:
-        return {"stocks": cached["data"], "days": days, "updated_at": cached["updated_at"]}
+        return {
+            "stocks": cached["data"],
+            "days": days,
+            "updated_at": cached["updated_at"],
+            "amount_unit": _AMOUNT_UNIT,
+            "source": _SOURCE_NAME,
+        }
 
     try:
         import akshare as ak
@@ -71,6 +93,7 @@ def lhb_top(days: int = Query(default=5, description="统计天数，支持 5/10
     stocks = []
     for _, row in df.iterrows():
         try:
+            # 新浪原始金额单位为万元；除以 10000 后统一以亿元返回。
             buy_amount  = round(float(row.get("buy_amount", 0)) / 10000, 2)
             sell_amount = round(float(row.get("sell_amount", 0)) / 10000, 2)
             net_amount  = round(float(row.get("net_amount", 0)) / 10000, 2)
@@ -101,7 +124,13 @@ def lhb_top(days: int = Query(default=5, description="统计天数，支持 5/10
 
     updated_at = datetime.now().strftime("%H:%M:%S")
     _top_cache[key] = {"data": stocks, "ts": now, "updated_at": updated_at}
-    return {"stocks": stocks, "days": days, "updated_at": updated_at}
+    return {
+        "stocks": stocks,
+        "days": days,
+        "updated_at": updated_at,
+        "amount_unit": _AMOUNT_UNIT,
+        "source": _SOURCE_NAME,
+    }
 
 
 # ── 当日明细 ──────────────────────────────────────────────────────────────────
@@ -111,18 +140,39 @@ def lhb_daily(date: str = Query(default=None, description="日期，格式 YYYYM
     指定日期的龙虎榜明细。
     返回：{ entries: [...], date: str, updated_at: str }
     """
-    date_str = date if date else _latest_trading_day()
+    date_str = date if date else _latest_published_trading_day()
+    try:
+        datetime.strptime(date_str, "%Y%m%d")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="日期格式必须为 YYYYMMDD")
 
     now = time.time()
     cached = _daily_cache.get(date_str)
     if cached and now - cached["ts"] < _CACHE_TTL:
-        return {"entries": cached["data"], "date": date_str, "updated_at": cached["updated_at"]}
+        return cached["payload"]
 
     try:
         import akshare as ak
         df = ak.stock_lhb_detail_daily_sina(date=date_str)
+    except KeyError:
+        message = (
+            "今日龙虎榜尚未发布。龙虎榜是收盘后披露数据，不是盘中实时榜单。"
+            if date_str == datetime.now().strftime("%Y%m%d")
+            else "数据源未返回该日期的龙虎榜，可能是非交易日或当日无公开交易信息。"
+        )
+        payload = _daily_empty_payload(date_str, message)
+        _daily_cache[date_str] = {"payload": payload, "ts": now}
+        return payload
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"龙虎榜日报数据获取失败: {e}")
+
+    if df.empty or not any("股票代码" in str(col) for col in df.columns):
+        payload = _daily_empty_payload(
+            date_str,
+            "数据源未返回该日期的龙虎榜，可能是非交易日或当日无公开交易信息。",
+        )
+        _daily_cache[date_str] = {"payload": payload, "ts": now}
+        return payload
 
     # 列名映射
     # 序号, 股票代码, 股票名称, 收盘价, 对应值, 成交量, 成交额, 指标
@@ -164,6 +214,7 @@ def lhb_daily(date: str = Query(default=None, description="日期，格式 YYYYM
             volume = 0
 
         try:
+            # 新浪原始成交额单位为万元；除以 10000 后统一以亿元返回。
             amount = round(float(row.get("amount", 0)) / 10000, 2)
         except (TypeError, ValueError):
             amount = 0.0
@@ -179,5 +230,14 @@ def lhb_daily(date: str = Query(default=None, description="日期，格式 YYYYM
         })
 
     updated_at = datetime.now().strftime("%H:%M:%S")
-    _daily_cache[date_str] = {"data": entries, "ts": now, "updated_at": updated_at}
-    return {"entries": entries, "date": date_str, "updated_at": updated_at}
+    payload = {
+        "entries": entries,
+        "date": date_str,
+        "updated_at": updated_at,
+        "amount_unit": _AMOUNT_UNIT,
+        "source": _SOURCE_NAME,
+        "is_published": True,
+        "message": "",
+    }
+    _daily_cache[date_str] = {"payload": payload, "ts": now}
+    return payload
