@@ -36,6 +36,7 @@ def _daily_empty_payload(date_str: str, message: str) -> dict:
         "updated_at": datetime.now().strftime("%H:%M:%S"),
         "amount_unit": _AMOUNT_UNIT,
         "source": _SOURCE_NAME,
+        "sort_by": "amount_desc",
         "is_published": False,
         "message": message,
     }
@@ -229,6 +230,9 @@ def lhb_daily(date: str = Query(default=None, description="日期，格式 YYYYM
             "reason":    str(row.get("reason", "")),
         })
 
+    # 当日明细优先展示资金关注度最高的股票；相同成交额保留源数据顺序。
+    entries.sort(key=lambda item: item["amount"], reverse=True)
+
     updated_at = datetime.now().strftime("%H:%M:%S")
     payload = {
         "entries": entries,
@@ -236,6 +240,7 @@ def lhb_daily(date: str = Query(default=None, description="日期，格式 YYYYM
         "updated_at": updated_at,
         "amount_unit": _AMOUNT_UNIT,
         "source": _SOURCE_NAME,
+        "sort_by": "amount_desc",
         "is_published": True,
         "message": "",
     }

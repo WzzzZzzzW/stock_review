@@ -56,6 +56,37 @@ class LhbApiTests(unittest.TestCase):
         self.assertEqual(result["amount_unit"], "亿元")
         self.assertEqual(result["entries"][0]["amount"], 134.24)
 
+    @patch("akshare.stock_lhb_detail_daily_sina")
+    def test_daily_sorts_entries_by_amount_descending(self, provider):
+        provider.return_value = pd.DataFrame([
+            {
+                "股票代码": "000001",
+                "股票名称": "低成交额",
+                "收盘价": 10,
+                "对应值": 7,
+                "成交量": 100,
+                "成交额": 10000,
+                "指标": "测试",
+            },
+            {
+                "股票代码": "000002",
+                "股票名称": "高成交额",
+                "收盘价": 20,
+                "对应值": 8,
+                "成交量": 200,
+                "成交额": 50000,
+                "指标": "测试",
+            },
+        ])
+
+        result = lhb.lhb_daily(date="20260721")
+
+        self.assertEqual(result["sort_by"], "amount_desc")
+        self.assertEqual(
+            [entry["symbol"] for entry in result["entries"]],
+            ["000002", "000001"],
+        )
+
     @patch("akshare.stock_lhb_detail_daily_sina", side_effect=KeyError("股票代码"))
     def test_daily_no_data_is_not_reported_as_provider_failure(self, _provider):
         result = lhb.lhb_daily(date=datetime.now().strftime("%Y%m%d"))

@@ -42,6 +42,7 @@ interface DailyResponse {
   updated_at: string
   amount_unit: string
   source:     string
+  sort_by:    string
   is_published: boolean
   message:    string
 }
@@ -276,7 +277,7 @@ function DailyView({
         <>
           {data && (
             <p className="text-xs text-gray-600 mb-3">
-              {data.date} — 共 {entries.length} 条记录，金额单位：{data.amount_unit}
+              {data.date} — 共 {entries.length} 条记录，金额单位：{data.amount_unit}，默认按成交额从高到低
             </p>
           )}
           {data?.message && (
